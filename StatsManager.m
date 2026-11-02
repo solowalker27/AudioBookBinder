@@ -95,7 +95,7 @@
         
         NSRect gradRect = NSZeroRect;
         gradRect.size = [sProgressGradient size];
-        [sProgressGradient drawInRect: done fromRect: gradRect operation: NSCompositeCopy
+        [sProgressGradient drawInRect: done fromRect: gradRect operation: NSCompositingOperationCopy
                              fraction: 1.0];
         
         [[NSColor blackColor] set];
@@ -109,20 +109,26 @@
 }
 
 - (void)updateConverter:(id)converter {
-    [lock lock];
+    if (![NSThread isMainThread]) {
+        dispatch_async(dispatch_get_main_queue(), ^{ [self updateConverter:converter]; });
+        return;
+    }
     if (![converters containsObject:converter])
         [converters addObject:converter];
     [self updateProgress];
-    [lock unlock];
+
 }
 
 - (void)removeConverter:(id)converter {
-    [lock lock];
+    if (![NSThread isMainThread]) {
+        dispatch_async(dispatch_get_main_queue(), ^{ [self removeConverter:converter]; });
+        return;
+    }
     if ([converters containsObject:converter]) {
         [converters removeObject:converter];
         [self updateProgress];
     }
-    [lock unlock];
+
 }
 
 @end

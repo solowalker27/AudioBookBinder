@@ -32,6 +32,8 @@
 #import "AudioBinderWindowController.h"
 #import "QueueController.h"
 #import "ConfigNames.h"
+#import "MetadataWindowController.h"
+#import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 
 #define TEXT_ACTION_REQUIRED    NSLocalizedString(@"User action required", nil)
 
@@ -39,12 +41,15 @@
 NSLocalizedString(@"It seems you are upgrading from previous version of Audiobook Binder. This upgrade introduces change in configuration format that requires your action: please confirm destination folder for audiobook files. This is one-time operation.", nil)
 
 BOOL requiresUpdateHack = NO;
+#ifdef APP_STORE_BUILD
 static BOOL hackChecked = NO;
+#endif
 
 @interface AudioBookBinderAppDelegate() {
     IBOutlet NSMenu *applicationMenu;
 
     NSMutableArray *windowControllers;
+    NSMutableArray<MetadataWindowController *> *metadataControllers;
 }
 
 @end
@@ -55,7 +60,8 @@ static BOOL hackChecked = NO;
 {
     NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
     
-    // make sure it's ran only once
+#ifdef APP_STORE_BUILD
+    // Only the App Store export workflow needs a persistent destination bookmark.
     if (!hackChecked) {
         NSString *dir = [defaults stringForKey:kConfigDestinationFolder];
         NSURL *url = [NSURL URLByResolvingBookmarkData:[defaults objectForKey:kConfigDestinationFolderBookmark] options:NSURLBookmarkResolutionWithSecurityScope relativeToURL:nil bookmarkDataIsStale:nil error:nil];
@@ -65,6 +71,7 @@ static BOOL hackChecked = NO;
         }
         hackChecked = YES;
     }
+#endif
     
     NSMutableDictionary *appDefaults = [NSMutableDictionary
                                         dictionaryWithObject:[NSNumber numberWithInt:2] forKey:kConfigChannels];
@@ -105,6 +112,7 @@ static BOOL hackChecked = NO;
     self = [super init];
     if (self) {
         windowControllers = [NSMutableArray new];
+        metadataControllers = [NSMutableArray new];
     }
     
     return self;
@@ -125,7 +133,7 @@ static BOOL hackChecked = NO;
             [a setMessageText:TEXT_ACTION_REQUIRED];
 
             [a setInformativeText:TEXT_UPGRADE_HACK];
-            [a setAlertStyle:NSWarningAlertStyle];
+            [a setAlertStyle:NSAlertStyleWarning];
             
             [a runModal];
             
@@ -138,14 +146,15 @@ static BOOL hackChecked = NO;
             [panel setCanCreateDirectories: YES];
             [panel setDirectoryURL:[NSURL fileURLWithPath:currentDest]];
             NSInteger result = [panel runModal];
-            if (result == NSOKButton)
+            if (result == NSModalResponseOK)
             {                
                 NSURL *folderURL = [panel URL];
                 NSData* data = [folderURL bookmarkDataWithOptions:NSURLBookmarkCreationWithSecurityScope includingResourceValuesForKeys:nil relativeToURL:nil error:nil];
-                [defaults setObject:data forKey:kConfigDestinationFolderBookmark];
+                if (data) [defaults setObject:data forKey:kConfigDestinationFolderBookmark];
                 [defaults synchronize];
                 break;
             }
+            else break;
         }
     }
     self.queueController = [[QueueController alloc] initWithWindowNibName:@"QueueWindow"];
@@ -181,7 +190,67 @@ static BOOL hackChecked = NO;
     return YES;
 }
 
+- (IBAction)editAudiobookMetadata:(id)sender
+{
+    NSOpenPanel *panel = NSOpenPanel.openPanel;
+    panel.title = NSLocalizedString(@"Edit Audiobook Metadata", nil);
+    panel.prompt = NSLocalizedString(@"Edit Metadata", nil);
+    panel.allowedContentTypes = @[[UTType typeWithFilenameExtension:@"m4b"]];
+    panel.allowsMultipleSelection = NO;
+    panel.canChooseDirectories = NO;
+    [panel beginWithCompletionHandler:^(NSModalResponse result) {
+        if (result != NSModalResponseOK) return;
+        for (MetadataWindowController *existing in self->metadataControllers) {
+            if ([existing.window.representedURL.URLByResolvingSymlinksInPath isEqual:panel.URL.URLByResolvingSymlinksInPath]) {
+                [existing showWindow:nil];
+                [existing.window makeKeyAndOrderFront:nil];
+                return;
+            }
+        }
+        NSError *error = nil;
+        MetadataWindowController *controller = [[MetadataWindowController alloc] initWithURL:panel.URL error:&error];
+        if (!controller) {
+            [[NSAlert alertWithError:error] runModal];
+            return;
+        }
+        __weak AudioBookBinderAppDelegate *weakSelf = self;
+        controller.onClose = ^(MetadataWindowController *closed) {
+            AudioBookBinderAppDelegate *strongSelf = weakSelf;
+            if (strongSelf) [strongSelf->metadataControllers removeObject:closed];
+        };
+        [self->metadataControllers addObject:controller];
+        [controller showWindow:nil];
+        [controller.window makeKeyAndOrderFront:nil];
+    }];
+}
+
 // Window delegate part
+
+- (NSApplicationTerminateReply)applicationShouldTerminate:(NSApplication *)sender
+{
+    MetadataWindowController *edited = nil;
+    for (MetadataWindowController *controller in metadataControllers) {
+        if (controller.saving) {
+            NSAlert *alert = [NSAlert new];
+            alert.messageText = NSLocalizedString(@"Metadata is being saved.", nil);
+            alert.informativeText = NSLocalizedString(@"Wait for the save to finish before quitting.", nil);
+            [alert runModal];
+            return NSTerminateCancel;
+        }
+        if (controller.window.documentEdited) edited = controller;
+    }
+    if (!edited) return NSTerminateNow;
+    NSAlert *alert = [NSAlert new];
+    alert.messageText = NSLocalizedString(@"There are unsaved metadata changes.", nil);
+    alert.informativeText = NSLocalizedString(@"Review and save your changes before quitting, or quit without saving them.", nil);
+    [alert addButtonWithTitle:NSLocalizedString(@"Review Changes", nil)];
+    [alert addButtonWithTitle:NSLocalizedString(@"Quit Without Saving", nil)];
+    [alert addButtonWithTitle:NSLocalizedString(@"Cancel", nil)];
+    NSModalResponse response = [alert runModal];
+    if (response == NSAlertSecondButtonReturn) return NSTerminateNow;
+    if (response == NSAlertFirstButtonReturn) [edited.window makeKeyAndOrderFront:nil];
+    return NSTerminateCancel;
+}
 
 - (void)windowWillClose:(NSNotification *)notification
 {

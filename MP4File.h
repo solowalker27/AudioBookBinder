@@ -29,6 +29,14 @@
 
 @class MP4Atom;
 
+@interface MP4Chapter : NSObject <NSCopying>
+@property (copy) NSString *title;
+@property uint64_t startMilliseconds;
+- (instancetype)initWithTitle:(NSString *)title startMilliseconds:(uint64_t)start;
++ (NSString *)timestampForMilliseconds:(uint64_t)milliseconds;
++ (BOOL)parseTimestamp:(NSString *)text milliseconds:(uint64_t *)milliseconds;
+@end
+
 @interface MP4File : NSObject
 
 @property (copy) NSString *artist;
@@ -39,8 +47,19 @@
 @property (copy) NSString *genre;
 @property (assign) unsigned short track, tracksTotal;
 @property (assign) BOOL gaplessPlay;
+// Loaded embedded artwork; assign PNG/JPEG data to replace it. Use removeCover to clear it.
+@property (copy) NSData *coverData;
+@property (assign) BOOL removeCover;
+@property (copy) NSArray<MP4Chapter *> *chapters;
+// Audio track duration, independent of the existing chapter track's duration.
+@property (readonly) uint64_t durationMilliseconds;
 
 -(id) initWithFileName: (NSString*)fileName;
 -(BOOL) updateFile;
+// Load existing tags, then save edits through a replacement copy without encoding audio.
+// Unchanged tags are preserved; empty strings remove edited text tags.
+-(BOOL) readMetadataWithError:(NSError **)error;
+-(BOOL) validateChaptersWithError:(NSError **)error;
+-(BOOL) saveMetadataWithError:(NSError **)error;
 
 @end

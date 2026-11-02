@@ -25,9 +25,7 @@
 //  SUCH DAMAGE.
 //
 
-extern "C" {
 #include "MetaEditor.h"
-};
 
 #include <mp4v2/mp4v2.h>
 #import "Chapter.h"
@@ -58,8 +56,10 @@ int addChapters(const char *mp4, NSArray *chapters)
         }
     }
     
-    if( !MP4_IS_VALID_TRACK_ID(refTrackId) )
+    if( !MP4_IS_VALID_TRACK_ID(refTrackId) ) {
+        MP4Close(h);
         return -1;
+    }
 
     MP4Duration trackDuration = MP4GetTrackDuration( h, refTrackId ); 
     uint32_t trackTimeScale = MP4GetTrackTimeScale( h, refTrackId );
@@ -68,6 +68,10 @@ int addChapters(const char *mp4, NSArray *chapters)
     MP4Chapter_t *mp4chapters;
     
     mp4chapters = (MP4Chapter_t*)malloc(numChapters * sizeof(MP4Chapter_t));
+    if (!mp4chapters) {
+        MP4Close(h);
+        return -1;
+    }
     int i = 0;
     for (Chapter *chapter in chapters) {
         MP4Chapter_t *chap = &mp4chapters[i];
@@ -78,8 +82,9 @@ int addChapters(const char *mp4, NSArray *chapters)
         i++;
     }
     
-    MP4SetChapters(h, mp4chapters, (int)numChapters, MP4ChapterTypeQt);
+    MP4ChapterType result = MP4SetChapters(h, mp4chapters, (uint32_t)numChapters, MP4ChapterTypeQt);
+    free(mp4chapters);
     MP4Close(h);
     
-    return 0;
+    return result == MP4ChapterTypeNone ? -1 : 0;
 }

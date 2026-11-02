@@ -44,14 +44,16 @@
 - (id)initWithFrame:(NSRect)frame {
     self = [super initWithFrame:frame];
     if (self) {
+        self.accessibilityElement = YES;
+        self.accessibilityRole = NSAccessibilityImageRole;
+        self.accessibilityLabel = NSLocalizedString(@"Cover artwork. Choose a cover or drop an image here.", nil);
         self.coverImage = nil;
         highlighted = NO;
-        highlightedColor = [NSColor blackColor];
-        normalColor = [NSColor colorWithCalibratedWhite:0.4 alpha:1];
+        highlightedColor = [NSColor controlAccentColor];
+        normalColor = [NSColor secondaryLabelColor];
         [self prepareAttributes];
         string = NSLocalizedString(@"⌘ + I\nor\nDrag Image Here", nil);
-        [self registerForDraggedTypes:[NSArray arrayWithObjects:NSTIFFPboardType, 
-                                       NSFilenamesPboardType, nil]];
+        [self registerForDraggedTypes:@[NSPasteboardTypeTIFF, NSPasteboardTypePNG, NSPasteboardTypeFileURL]];
         self.coverImageFilename = nil;
 
     }
@@ -61,13 +63,13 @@
 
 - (void) prepareAttributes {
     attributes = [[NSMutableDictionary alloc] init];
-    [attributes setObject:[NSFont fontWithName:@"Helvetica" size:24]
+    [attributes setObject:[NSFont systemFontOfSize:18]
                    forKey:NSFontAttributeName];
 
 
     NSMutableParagraphStyle *centeredStyle = 
         [[NSParagraphStyle defaultParagraphStyle] mutableCopy];
-    [centeredStyle setAlignment:NSCenterTextAlignment];
+    [centeredStyle setAlignment:NSTextAlignmentCenter];
 
     [attributes setObject:[centeredStyle copy]
                    forKey:NSParagraphStyleAttributeName];
@@ -89,27 +91,8 @@
 
 - (BOOL) shouldConvert
 {
-    NSString *ext;
-	char ext_temp;
-    NSUInteger ch;
-        
-    // we care only about filename. If image was brough by dragging 
-    // picture - it's converted to PNG
-    if (self.coverImageFilename == nil)
-        return YES;
-    
-    for (ch = [self.coverImageFilename length]; 
-         ((ext_temp = [self.coverImageFilename characterAtIndex:(ch - 1)]) != '.') && (ch >= 0); ch--)
-		;
-	ext = [[self.coverImageFilename lowercaseString] substringFromIndex:ch];
-    
-
-	if ([ext isEqualToString:@"jpg"] || [ext isEqualToString:@"jpeg"])
-		return NO;
-	else if ([ext isEqualToString:@"png"])
-		return NO;
-	else // none of the above
-		return YES;
+    NSString *ext = self.coverImageFilename.pathExtension.lowercaseString;
+    return ![@[@"jpg", @"jpeg", @"png"] containsObject:ext ?: @""];
 }
 
 
@@ -138,6 +121,7 @@
     {
         _coverImage = nil;
         scaledImage = nil;
+        [self setNeedsDisplay:YES];
         return;
     }
     
@@ -166,7 +150,7 @@
         [[NSGraphicsContext currentContext] setImageInterpolation:NSImageInterpolationHigh];
         [_coverImage drawInRect:NSMakeRect(0, 0, scaledSize.width, scaledSize.height)
                     fromRect:NSMakeRect(0, 0, origSize.width, origSize.height)
-                   operation:NSCompositeSourceOver 
+                   operation:NSCompositingOperationSourceOver
                     fraction:1.0];
         [scaledImage unlockFocus];
     }
@@ -252,7 +236,7 @@
         arr[1] = 2.0;
         
         [bgPath setLineDash:arr count:2 phase:0.0];
-        [bgPath setLineCapStyle:NSRoundLineCapStyle];
+        [bgPath setLineCapStyle:NSLineCapStyleRound];
         [bgPath stroke];
         [self drawStringCenteredIn:[self bounds]];
     }
@@ -264,107 +248,47 @@
         orig.x = (viewSize.size.width - imageSize.width) / 2;
         orig.y = (viewSize.size.height - imageSize.height) / 2;
         
-        [scaledImage drawAtPoint:orig fromRect:imageRect operation:NSCompositeSourceOver fraction:1.0];
+        [scaledImage drawAtPoint:orig fromRect:imageRect operation:NSCompositingOperationSourceOver fraction:1.0];
     }
     
 }
 
-- (NSDragOperation)draggingEntered:(id <NSDraggingInfo>)sender
+- (NSDragOperation)draggingEntered:(id<NSDraggingInfo>)sender
 {
-    if ([sender draggingSource] == self) {
-        return NSDragOperationNone;
-    }
-    
-    NSPasteboard *paste = [sender draggingPasteboard];
-    //gets the dragging-specific pasteboard from the sender
-    NSArray *types = [NSArray arrayWithObjects:NSTIFFPboardType, 
-                      NSFilenamesPboardType, nil];
-    //a list of types that we can accept
-    NSString *desiredType = [paste availableTypeFromArray:types];
-    NSData *carriedData = [paste dataForType:desiredType];
-    
-    if (nil == carriedData)
-        return NSDragOperationNone;
-
-    if ([desiredType isEqualToString:NSFilenamesPboardType])
-    {
-        //we have a list of file names in an NSData object
-        NSArray *fileArray = [paste propertyListForType:@"NSFilenamesPboardType"];
-        if ([fileArray count] > 1) {
-            return NSDragOperationNone;
-        }
-    }
-    
-    highlighted = YES;
+    if (sender.draggingSource == self) return NSDragOperationNone;
+    NSPasteboard *pasteboard = sender.draggingPasteboard;
+    NSArray<NSURL *> *files = [pasteboard readObjectsForClasses:@[NSURL.class] options:@{NSPasteboardURLReadingFileURLsOnlyKey: @YES}];
+    BOOL canRead = files.count == 1 || (files.count == 0 && [pasteboard canReadObjectForClasses:@[NSImage.class] options:@{}]);
+    highlighted = canRead;
     [self setNeedsDisplay:YES];
-
-    return NSDragOperationGeneric;
+    return canRead ? NSDragOperationCopy : NSDragOperationNone;
 }
 
-- (void)draggingExited:(id <NSDraggingInfo>)sender
+- (void)draggingExited:(id<NSDraggingInfo>)sender
 {
     highlighted = NO;
     [self setNeedsDisplay:YES];
 }
 
-- (BOOL)prepareForDragOperation:(id <NSDraggingInfo>)sender
+- (BOOL)prepareForDragOperation:(id<NSDraggingInfo>)sender
 {
     return YES;
 }
 
-- (BOOL)performDragOperation:(id <NSDraggingInfo>)sender
+- (BOOL)performDragOperation:(id<NSDraggingInfo>)sender
 {
-    NSPasteboard *paste = [sender draggingPasteboard];
-    //gets the dragging-specific pasteboard from the sender
-    NSArray *types = [NSArray arrayWithObjects:NSTIFFPboardType, 
-                      NSFilenamesPboardType, nil];
-    //a list of types that we can accept
-    NSString *desiredType = [paste availableTypeFromArray:types];
-    NSData *carriedData = [paste dataForType:desiredType];
-    
-    if (nil == carriedData)
-    {
-        //the operation failed for some reason
-        NSRunAlertPanel(@"Paste Error", @"Sorry, but the past operation failed", 
-                        nil, nil, nil);
-        return NO;
+    NSPasteboard *pasteboard = sender.draggingPasteboard;
+    NSArray<NSURL *> *files = [pasteboard readObjectsForClasses:@[NSURL.class] options:@{NSPasteboardURLReadingFileURLsOnlyKey: @YES}];
+    if (files.count == 1) {
+        NSImage *image = [[NSImage alloc] initWithContentsOfURL:files.firstObject];
+        if (!image) return NO;
+        self.coverImageFilename = files.firstObject.path;
+    } else {
+        NSArray<NSImage *> *images = [pasteboard readObjectsForClasses:@[NSImage.class] options:@{}];
+        if (images.count == 0) return NO;
+        [self resetImage];
+        self.coverImage = images.firstObject;
     }
-    else
-    {
-        NSImage *newImage = nil;
-        //the pasteboard was able to give us some meaningful data
-        if ([desiredType isEqualToString:NSTIFFPboardType])
-        {
-            [self resetImage];
-            //we have TIFF bitmap data in the NSData object
-            newImage = [[NSImage alloc] initWithData:carriedData];
-            self.coverImage = newImage;
-            if (newImage == nil)
-                return NO;
-        }
-        else if ([desiredType isEqualToString:NSFilenamesPboardType])
-        {
-            //we have a list of file names in an NSData object
-            NSArray *fileArray = [paste propertyListForType:@"NSFilenamesPboardType"];
-            //be caseful since this method returns id.  
-            //We just happen to know that it will be an array.
-            NSString *path = [fileArray objectAtIndex:0];
-            //assume that we can ignore all but the first path in the list
-            
-            self.coverImageFilename = path;
-            
-            if (self.coverImageFilename == nil)
-                return NO;
-        }
-        else
-        {
-            //this can't happen
-            NSAssert(NO, @"This can't happen");
-            return NO;
-        }
-
-    }
-    
     return YES;
 }
 

@@ -1,3 +1,14 @@
+Version 2.7 — macOS modernization
+- Edit existing M4B metadata, cover art, and chapter titles/start times without
+  re-encoding; validate edits and stage saves before replacing the original.
+- Native Liquid Glass navigation and toolbar; resizable book-details layout.
+- macOS 13+ deployment, current SDK support, and universal GUI/CLI builds.
+- Protect existing files during failed/cancelled audio encoding.
+- Use mp4v2 for metadata; fix release-only atom encoding and chapter handling.
+- Fix hour-based splitting, volume paths, bitrate initialization, artwork
+  extension handling, playback state, and sandbox startup/save behavior.
+- Modern file-URL drag and drop, semantic colors, integration tests, and CI.
+
 2010/12/01 1.9
 	- Play/stop audiofile directly from Audiobook Binder
 	- Better keyboard navigation in chapters mode (left arrow folds chapter,

@@ -26,6 +26,7 @@
 //
 
 #import <CoreServices/CoreServices.h>
+#import <stdatomic.h>
 #import <AudioToolbox/AudioConverter.h>
 
 #import "AudioBinder.h"
@@ -109,8 +110,8 @@ stringForOSStatus(OSStatus err)
     ExtAudioFileRef _outAudioFile;
     SInt64 _outFileLength;
     SInt64 _outBookLength;
-    id _delegate;
-    BOOL _canceled;
+    __weak id<AudioBinderDelegate> _delegate;
+    atomic_bool _canceled;
     BOOL _bitrateSet;
 }
 @end
@@ -132,8 +133,9 @@ stringForOSStatus(OSStatus err)
     [_volumes removeAllObjects];
     _outAudioFile = nil;
     _outFileLength = 0;
+    _outBookLength = 0;
     _delegate = nil;
-    _canceled = NO;
+    atomic_store(&_canceled, false);
     _sampleRate = DEFAULT_SAMPLE_RATE;
     _channels = 2;
     _bitrate = 0;
@@ -153,74 +155,128 @@ stringForOSStatus(OSStatus err)
 
 -(BOOL)convert
 {
-    BOOL failed = NO;
-    NSFileManager *fm;
-    int filesConverted = 0;
-    for (AudioBookVolume *v in _volumes) {
-    
-        if ([v.inputFiles count] == 0)
-        {
-            ABBLog(@"No input files");
-            [_delegate volumeFailed:v.filename reason:@"No input files"];
+    NSFileManager *fm = NSFileManager.defaultManager;
+    NSMutableArray<NSDictionary *> *outputs = [NSMutableArray array];
+    NSMutableSet *destinations = [NSMutableSet set];
+    BOOL success = NO;
+    NSUInteger filesConverted = 0;
+    _outBookLength = 0;
+
+    if (!isfinite(_sampleRate) || _sampleRate <= 0 || (_channels != 1 && _channels != 2)) {
+        [_delegate volumeFailed:@"" reason:@"Invalid sample rate or channel count"];
+        return NO;
+    }
+
+    // Validate the entire job before touching any existing file, including input aliases.
+    for (AudioBookVolume *volume in _volumes) {
+        NSString *destination = volume.filename.stringByStandardizingPath.stringByResolvingSymlinksInPath;
+        if (volume.inputFiles.count == 0 || [destinations containsObject:destination]) {
+            [_delegate volumeFailed:volume.filename reason:@"Empty volume or duplicate output path"];
             return NO;
         }
-
-        if ([self openOutFile:v.filename] == NO)
-        {
-            ABBLog(@"Can't open output file");
-            [_delegate volumeFailed:v.filename reason:@"Can't create output file"];
-            return NO;
-        }
-
-
-        for (AudioFile *inFile in v.inputFiles) {
-            NSString *reason;
-            
-            if ([self convertOneFile:inFile reason:&reason] == NO)
-            {
-                // We failed 
-                if (![_delegate continueFailedConversion:inFile reason:reason])
-                {
-                    failed = YES;
-                    break;
+        for (AudioBookVolume *sourceVolume in _volumes) {
+            for (AudioFile *input in sourceVolume.inputFiles) {
+                NSString *source = input.filePath.stringByStandardizingPath.stringByResolvingSymlinksInPath;
+                NSDictionary *sourceAttrs = [fm attributesOfItemAtPath:source error:nil];
+                NSDictionary *destAttrs = [fm attributesOfItemAtPath:destination error:nil];
+                BOOL sameFile = sourceAttrs && destAttrs &&
+                    [sourceAttrs[NSFileSystemNumber] isEqual:destAttrs[NSFileSystemNumber]] &&
+                    [sourceAttrs[NSFileSystemFileNumber] isEqual:destAttrs[NSFileSystemFileNumber]];
+                if ([destination isEqualToString:source] || sameFile) {
+                    [_delegate volumeFailed:volume.filename reason:@"The output must not replace an input file"];
+                    return NO;
                 }
             }
-            else
-                filesConverted++;
-            
-            if (_canceled)
-                break;
-        
-        } 
+        }
+        BOOL directory = NO;
+        if ([fm fileExistsAtPath:destination isDirectory:&directory] && directory) {
+            [_delegate volumeFailed:volume.filename reason:@"The output path is a directory"];
+            return NO;
+        }
+        [destinations addObject:destination];
+    }
 
-        _outBookLength += _outFileLength; 
-        
+    @try {
+        for (AudioBookVolume *volume in _volumes) {
+            if (atomic_load(&_canceled)) return NO;
+            NSError *error = nil;
+            NSURL *replacementDirectory = [fm URLForDirectory:NSItemReplacementDirectory
+                                                     inDomain:NSUserDomainMask
+                                            appropriateForURL:[NSURL fileURLWithPath:volume.filename]
+                                                       create:YES error:&error];
+            if (!replacementDirectory) {
+                [_delegate volumeFailed:volume.filename reason:error.localizedDescription];
+                return NO;
+            }
+            NSString *directory = replacementDirectory.path;
+            NSString *staged = [directory stringByAppendingPathComponent:@"audio.m4b"];
+            NSMutableDictionary *output = [@{@"directory": directory, @"staged": staged, @"destination": volume.filename} mutableCopy];
+            [outputs addObject:output];
+            if (![self openOutFile:staged]) {
+                [_delegate volumeFailed:volume.filename reason:@"Can't create output file"];
+                return NO;
+            }
+            NSUInteger volumeFiles = 0;
+            for (AudioFile *input in volume.inputFiles) {
+                NSString *reason = nil;
+                if ([self convertOneFile:input reason:&reason]) {
+                    filesConverted++;
+                    volumeFiles++;
+                } else if (![_delegate continueFailedConversion:input reason:reason]) {
+                    return NO;
+                }
+                if (atomic_load(&_canceled)) return NO;
+            }
+            // Disposing flushes the encoder and writes its MP4 headers; failure is fatal.
+            OSStatus status = ExtAudioFileDispose(_outAudioFile);
+            _outAudioFile = NULL;
+            if (status != noErr || volumeFiles == 0) {
+                [_delegate volumeFailed:volume.filename reason:@"Could not finalize the audio file"];
+                return NO;
+            }
+            _outBookLength += _outFileLength;
+            output[@"duration"] = @((UInt32)(_outFileLength / _sampleRate));
+        }
+        if (filesConverted == 0 || atomic_load(&_canceled)) return NO;
+
+        // Stage every volume first. Backups allow rollback if installing any volume fails.
+        for (NSMutableDictionary *output in outputs) {
+            NSString *destination = output[@"destination"];
+            NSError *error = nil;
+            if ([fm fileExistsAtPath:destination]) {
+                NSString *backup = [output[@"directory"] stringByAppendingPathComponent:@"previous"];
+                if (![fm moveItemAtPath:destination toPath:backup error:&error]) {
+                    [_delegate volumeFailed:destination reason:error.localizedDescription];
+                    return NO;
+                }
+                output[@"backup"] = backup;
+            }
+            if (![fm moveItemAtPath:output[@"staged"] toPath:destination error:&error]) {
+                [_delegate volumeFailed:destination reason:error.localizedDescription];
+                return NO;
+            }
+            output[@"installed"] = @YES;
+        }
+        success = YES;
+        for (NSDictionary *output in outputs) [_delegate volumeReady:output[@"destination"] duration:[output[@"duration"] unsignedIntValue]];
+        [_delegate audiobookReady:(UInt32)(_outBookLength / _sampleRate)];
+        return YES;
+    } @finally {
         [self closeOutFile];
-        
-        if (failed || _canceled)
-            break;
-        else
-            [_delegate volumeReady:v.filename duration:(UInt32)(_outFileLength/_sampleRate)];
+        for (NSDictionary *output in outputs.reverseObjectEnumerator) {
+            BOOL restored = YES;
+            if (!success) {
+                if ([output[@"installed"] boolValue]) [fm removeItemAtPath:output[@"destination"] error:nil];
+                if (output[@"backup"]) {
+                    NSError *error = nil;
+                    restored = [fm moveItemAtPath:output[@"backup"] toPath:output[@"destination"] error:&error];
+                    if (!restored) [_delegate volumeFailed:output[@"destination"] reason:[NSString stringWithFormat:@"Previous file preserved at %@: %@", output[@"backup"], error.localizedDescription]];
+                }
+            }
+            if (restored) [fm removeItemAtPath:output[@"directory"] error:nil];
+        }
+        atomic_store(&_canceled, false);
     }
-    
-    if (failed || _canceled)
-    {
-        fm = [NSFileManager defaultManager];
-        for (AudioBookVolume *v in _volumes) 
-            [fm removeItemAtPath:v.filename error:nil];
-    }
-       
-    BOOL result = YES;
-    // Did we fail? Were there any files successfully converted? 
-    if (failed || (filesConverted == 0) || _canceled)
-        result = NO;
-    else
-        [_delegate audiobookReady:(UInt32)(_outBookLength/_sampleRate)];
-    
-    // Back to non-cacneled state
-    _canceled = NO;
-    
-    return result;
 }
 
 -(BOOL)openOutFile:(NSString*)outFile
@@ -259,6 +315,7 @@ stringForOSStatus(OSStatus err)
     
     // reset output file length
     _outFileLength = 0;
+    _bitrateSet = NO;
 
     return YES;
 }
@@ -412,13 +469,14 @@ stringForOSStatus(OSStatus err)
         }
         
         audioBuffer = malloc(AUDIO_BUFFER_SIZE);
-        NSAssert(audioBuffer != NULL, @"malloc failed");
+        if (!audioBuffer) [NSException raise:@"ConvertException" format:@"Unable to allocate audio buffer"];
         bufferList.mNumberBuffers = 1;
         bufferList.mBuffers[0].mNumberChannels = pcmFormat.mChannelsPerFrame;
         bufferList.mBuffers[0].mData = audioBuffer;
         bufferList.mBuffers[0].mDataByteSize = AUDIO_BUFFER_SIZE;
                 
         do {
+            bufferList.mBuffers[0].mDataByteSize = AUDIO_BUFFER_SIZE;
             
             framesToRead = 
                 bufferList.mBuffers[0].mDataByteSize / pcmFormat.mBytesPerFrame;
@@ -450,18 +508,19 @@ stringForOSStatus(OSStatus err)
                             format:@"ExtAudioFileTell failed: %@", 
                  stringForOSStatus(status)];
             
-            if (_canceled)
+            if (atomic_load(&_canceled))
                 break;
 
         } while(framesToRead > 0);
 
 
-        UInt32 duration = framesConverted*1000/_sampleRate;
-        [_delegate conversionFinished:inFile
-                             duration:duration];
+        if (!atomic_load(&_canceled)) {
+            UInt32 duration = framesConverted*1000/_sampleRate;
+            [_delegate conversionFinished:inFile duration:duration];
+        }
     }  
     @catch (NSException *e) {
-        *reason = [e reason];
+        if (reason) *reason = [e reason];
         if (inAudioFile != nil)
             ExtAudioFileDispose(inAudioFile);
         if (audioBuffer)
@@ -481,7 +540,7 @@ stringForOSStatus(OSStatus err)
 
 - (void) cancel
 {
-    _canceled = YES;
+    atomic_store(&_canceled, true);
 }
 
 -(NSArray*) validBitrates

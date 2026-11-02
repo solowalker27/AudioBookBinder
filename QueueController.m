@@ -76,10 +76,10 @@
     
     NSColor* fnameColor;
     if (self.isHighlighted && [view.window isMainWindow] && [view.window firstResponder] == view) {
-        fnameColor = [NSColor whiteColor];
+        fnameColor = [NSColor selectedControlTextColor];
     }
     else {
-        fnameColor = [NSColor blackColor];
+        fnameColor = [NSColor labelColor];
     }
     
     NSDictionary* fnameAttrs = [NSDictionary dictionaryWithObjectsAndKeys:
@@ -106,7 +106,7 @@
     statusRect.size.height = STATUS_HEIGHT - STATUS_TOP_MARGIN;
     
     NSColor* statusColor;
-    statusColor = [NSColor grayColor];
+    statusColor = [NSColor secondaryLabelColor];
     
     NSDictionary* statusAttrs = [NSDictionary dictionaryWithObjectsAndKeys:
                                  [[self class] statusStyle], NSParagraphStyleAttributeName,
@@ -128,7 +128,7 @@
     static NSMutableParagraphStyle* fileNameStyle = nil;
     if (!fileNameStyle) {
         fileNameStyle = [NSMutableParagraphStyle new];
-        [fileNameStyle setAlignment:NSLeftTextAlignment];
+        [fileNameStyle setAlignment:NSTextAlignmentLeft];
         [fileNameStyle setLineBreakMode:NSLineBreakByTruncatingMiddle];
     }
     return fileNameStyle;
@@ -139,7 +139,7 @@
     static NSMutableParagraphStyle* statusStyle = nil;
     if (!statusStyle) {
         statusStyle = [NSMutableParagraphStyle new];
-        [statusStyle setAlignment:NSLeftTextAlignment];
+        [statusStyle setAlignment:NSTextAlignmentLeft];
         [statusStyle setLineBreakMode:NSLineBreakByTruncatingTail];
     }
     return statusStyle;

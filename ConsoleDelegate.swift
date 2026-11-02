@@ -40,7 +40,7 @@ class ConsoleDelegate: NSObject, AudioBinderDelegate {
     }
 
     func updateStatus(_ file: AudioFile!, handled handledFrames: UInt64, total totalFrames: UInt64) {
-        guard !quiet && istty else { return }
+        guard !quiet && istty && totalFrames > 0 else { return }
         let percent = handledFrames * 100 / totalFrames
         print("\r\(file.filePath!): [\(String(format: "%3llu", percent))%] \(handledFrames)/\(totalFrames)", terminator: "")
         fflush(stdout)

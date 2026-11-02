@@ -1,0 +1,30 @@
+name: Build and test
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  macos:
+    runs-on: macos-latest
+    strategy:
+      matrix:
+        configuration: [Debug, Release]
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          submodules: recursive
+      - name: Build universal app and CLI; test conversion and metadata
+        env:
+          CONFIGURATION: ${{ matrix.configuration }}
+        run: ./scripts/test.sh
+      - name: Upload build logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-logs-${{ matrix.configuration }}
+          path: build/*.log

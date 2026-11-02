@@ -82,6 +82,17 @@
                                 </connections>
                             </menuItem>
                             <menuItem isSeparatorItem="YES" id="1063"/>
+                            <menuItem title="Edit Audiobook Metadata…" keyEquivalent="o" id="metadata-open-item">
+                                <modifierMask key="keyEquivalentModifierMask" shift="YES" command="YES"/>
+                                <connections>
+                                    <action selector="editAudiobookMetadata:" target="494" id="metadata-open-action"/>
+                                </connections>
+                            </menuItem>
+                            <menuItem title="Save Metadata" keyEquivalent="s" id="metadata-save-item">
+                                <connections>
+                                    <action selector="saveDocument:" target="-1" id="metadata-save-action"/>
+                                </connections>
+                            </menuItem>
                             <menuItem title="Add Files" keyEquivalent="o" id="72">
                                 <connections>
                                     <action selector="addFiles:" target="-1" id="1054"/>
@@ -248,7 +259,7 @@
         <customObject id="420" customClass="NSFontManager"/>
         <userDefaultsController representsSharedInstance="YES" id="591"/>
         <window title="Preferences" allowsToolTipsWhenApplicationIsInactive="NO" autorecalculatesKeyViewLoop="NO" hidesOnDeactivate="YES" oneShot="NO" releasedWhenClosed="NO" visibleAtLaunch="NO" animationBehavior="default" id="611" customClass="NSPanel">
-            <windowStyleMask key="styleMask" titled="YES" closable="YES" miniaturizable="YES" resizable="YES" utility="YES" texturedBackground="YES"/>
+            <windowStyleMask key="styleMask" titled="YES" closable="YES" miniaturizable="YES" resizable="YES" utility="YES"/>
             <windowPositionMask key="initialPositionMask" leftStrut="YES" rightStrut="YES" topStrut="YES" bottomStrut="YES"/>
             <rect key="contentRect" x="140" y="271" width="429" height="319"/>
             <rect key="screenRect" x="0.0" y="0.0" width="1440" height="878"/>

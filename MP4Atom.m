@@ -51,6 +51,7 @@
     UInt32 lLength;
     if (!(self = [super init])) return nil;
 
+    if (data.length < 8) return nil;
     self.offset = off;
     NSRange range;
     range.length = 4;
@@ -77,8 +78,8 @@
     } hdr;
 
     hdr.beLength = htonl(self.length);
-    NSAssert([self.name getCString:hdr.name maxLength:5 encoding:NSMacOSRomanStringEncoding],
-            @"Failed to convert tag name");
+    if (![self.name getCString:hdr.name maxLength:5 encoding:NSMacOSRomanStringEncoding])
+        return nil;
     NSData *data = [NSData dataWithBytes:&hdr length:8];
     return data;
 }

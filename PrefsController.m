@@ -76,7 +76,7 @@
     [panel setCanCreateDirectories: YES];
     
     [panel beginSheetModalForWindow:[self window] completionHandler:^(NSInteger result) {
-        if (result == NSFileHandlingPanelOKButton) {
+        if (result == NSModalResponseOK) {
             NSURL *folderURL = [panel URL];
             NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
 #ifdef APP_STORE_BUILD
@@ -112,8 +112,8 @@
 - (void) fixupBitrate
 {
     NSInteger bitrate = [[NSUserDefaults standardUserDefaults] integerForKey:kConfigBitrate];
-    NSInteger newBitrate;
-    NSInteger distance = bitrate;
+    NSInteger newBitrate = 0;
+    NSInteger distance = NSIntegerMax;
     
     for (NSNumber *n in self.validBitrates) {
         if (labs([n integerValue] - bitrate) < distance) {
@@ -122,7 +122,7 @@
         }
     }
     
-    if (newBitrate != bitrate) {
+    if (newBitrate > 0 && newBitrate != bitrate) {
         [[NSUserDefaults standardUserDefaults] setInteger:newBitrate forKey:kConfigBitrate];
     }
 }

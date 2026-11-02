@@ -63,8 +63,8 @@
     if (AudioFileOpenURL(url, 0x01, 0, &audioFile) == noErr) {        
         UInt32 len = sizeof(NSTimeInterval);
         NSTimeInterval dur;
-        if (AudioFileGetProperty(audioFile, kAudioFilePropertyEstimatedDuration, &len, &dur) == noErr) 
-            self.duration = [[NSNumber alloc] initWithInt:(dur*1000)];
+        if (AudioFileGetProperty(audioFile, kAudioFilePropertyEstimatedDuration, &len, &dur) == noErr && isfinite(dur) && dur >= 0)
+            self.duration = @(MAX(0, dur * 1000));
 
         UInt32 writable = 0, size;
         status = AudioFileGetPropertyInfo(audioFile, 
@@ -74,33 +74,33 @@
             CFDictionaryRef info = NULL;
             status = AudioFileGetProperty(audioFile, 
                 kAudioFilePropertyInfoDictionary, &size, &info);
-            if ( status == noErr ) {
+            if ( status == noErr && info != NULL ) {
                 NSDictionary *properties = [NSDictionary dictionaryWithDictionary:(__bridge NSDictionary*)info];
                 // convert properties to CString and back to get rid of
                 // trailing zero bytes in NSString
                 
                 id obj = [properties objectForKey:@"artist"];
 
-                if (obj)
+                if ([obj isKindOfClass:[NSString class]])
                     self.artist = [NSString stringWithUTF8String:[obj UTF8String]];
                 else
                     self.artist = @"";
 
                 obj = [properties objectForKey:@"title"];
-                if (obj) 
+                if ([obj isKindOfClass:[NSString class]])
                     self.name = [NSString stringWithUTF8String:[obj UTF8String]];
                 else
                     self.name = @"";
                 
                 obj = [properties objectForKey:@"album"];
-                if (obj) 
+                if ([obj isKindOfClass:[NSString class]])
                     self.album = [NSString stringWithUTF8String:[obj UTF8String]];
                 else
                     self.album = @"";
             }
-            CFRelease(info);
+            if (info != NULL) CFRelease(info);
         }
-        self.valid = YES;
+        self.valid = self.duration.doubleValue >= 0;
         AudioFileClose(audioFile);
     }
 

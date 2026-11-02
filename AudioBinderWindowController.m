@@ -27,11 +27,9 @@
 
 #import "AudioBinder.h"
 #import "AudioBookVolume.h"
-#import "AudioBookVolume.h"
 #import "AudioBinderWindowController.h"
 #import "AudioBookBinderAppDelegate.h"
 #import "AudioFile.h"
-#import "Chapter.h"
 #import "Chapter.h"
 #import "ConfigNames.h"
 #import "ExpandedPathToIconTransformer.h"
@@ -93,11 +91,13 @@ enum abb_form_fields {
     ABBTitle,
 };
 
-@interface AudioBinderWindowController () {
+@interface AudioBinderWindowController () <NSToolbarDelegate> {
+    NSSegmentedControl *_sectionPicker;
+    NSTextField *_emptyState;
+    NSButton *_removeButton;
     NSURL *_destURL;
     NSMutableArray *knownGenres;
     BOOL autocompleting;
-    BOOL _playing;
     NSString *outFile;
     AudioBinder *_binder;
     NSSound *_sound;
@@ -136,6 +136,9 @@ enum abb_form_fields {
 
 - (void)dealloc
 {
+    _sound.delegate = nil;
+    [_sound stop];
+    [NSNotificationCenter.defaultCenter removeObserver:self];
     [fileList removeObserver:self forKeyPath:@"hasFiles"];
     [fileList removeObserver:self forKeyPath:@"canPlay"];
     [fileList removeObserver:self forKeyPath:@"commonAuthor"];
@@ -150,7 +153,7 @@ enum abb_form_fields {
     [fileListView setDataSource:fileList];
     [fileListView setDelegate:fileList];
     [fileListView setAllowsMultipleSelection:YES];
-    [fileListView registerForDraggedTypes:[NSArray arrayWithObjects:NSStringPboardType, NSFilenamesPboardType, nil]];
+    [fileListView registerForDraggedTypes:@[NSPasteboardTypeString, NSPasteboardTypeFileURL]];
     [fileListView setDraggingSourceOperationMask:NSDragOperationEvery forLocal:YES];
     [fileListView setDraggingSourceOperationMask:NSDragOperationCopy forLocal:NO];
     [fileListView setAutoresizesOutlineColumn:NO];
@@ -158,18 +161,14 @@ enum abb_form_fields {
     [fileListView expandItem:nil expandChildren:YES];
     
     _binder = [[AudioBinder alloc] init];
-    _playing = NO;
     _converting = NO;
     _enqueued = NO;
-    NSString* img = [[NSBundle mainBundle] pathForResource:@"Play" ofType:@"png"];
-    NSURL* url = [NSURL fileURLWithPath:img];
-    _playImg = [[NSImage alloc] initWithContentsOfURL:url];
-    img = [[NSBundle mainBundle] pathForResource:@"Stop" ofType:@"png"];
-    url = [NSURL fileURLWithPath:img];
-    _stopImg = [[NSImage alloc] initWithContentsOfURL:url];
+    _playImg = [NSImage imageWithSystemSymbolName:@"play.fill" accessibilityDescription:NSLocalizedString(@"Preview", nil)];
+    _stopImg = [NSImage imageWithSystemSymbolName:@"stop.fill" accessibilityDescription:NSLocalizedString(@"Stop", nil)];
     
-    [playButton setImage:_playImg] ;
-    [playButton setEnabled:NO];
+    [playButton setImage:_playImg];
+    playButton.accessibilityLabel = NSLocalizedString(@"Preview", nil);
+    [self setPreviewEnabled:NO];
     _playingFile = nil;
     _destURL = nil;
     _totalBookProgress = 0;
@@ -196,12 +195,238 @@ enum abb_form_fields {
     [self updateWindowTitle];
     [self setupColumns];
     [self setupGenres];
-    [bindButton setEnabled:FALSE];
+    [self setCreateEnabled:FALSE];
     
     AudioBookBinderAppDelegate *delegate = (AudioBookBinderAppDelegate*)[[NSApplication sharedApplication] delegate];
     [self.window setDelegate:delegate];
     
-    // _queueOverlay = [[QueueOverlayView alloc] init];
+    [self modernizeWindow];
+    [NSNotificationCenter.defaultCenter addObserver:self selector:@selector(updateSelection:) name:NSOutlineViewSelectionDidChangeNotification object:fileListView];
+}
+
+// Keep the existing models, bindings and actions while using native, adaptive AppKit controls.
+- (void)modernizeWindow
+{
+    NSWindow *window = self.window;
+    window.styleMask &= ~NSWindowStyleMaskTexturedBackground;
+    window.titlebarAppearsTransparent = YES;
+    window.toolbarStyle = NSWindowToolbarStyleUnified;
+    window.contentMinSize = NSMakeSize(780, 440);
+    [window setContentSize:NSMakeSize(960, 640)];
+
+    // Retain the nib's controls before detaching their original parent views.
+    NSArray *fields = @[authorField, titleField, actorField, genresField];
+    NSScrollView *scroll = fileListView.enclosingScrollView;
+    [scroll removeFromSuperview];
+    [coverImageView removeFromSuperview];
+    [tabs removeFromSuperview];
+    [playButton removeFromSuperview];
+    [bindButton removeFromSuperview];
+    [genresButton removeFromSuperview];
+    for (NSView *field in fields) [field removeFromSuperview];
+
+    NSView *root = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, 960, 640)];
+    window.contentView = root;
+    NSVisualEffectView *sidebar = [NSVisualEffectView new];
+    sidebar.material = NSVisualEffectMaterialSidebar;
+    sidebar.blendingMode = NSVisualEffectBlendingModeBehindWindow;
+    sidebar.translatesAutoresizingMaskIntoConstraints = NO;
+    [root addSubview:sidebar];
+
+    NSTextField *heading = [NSTextField labelWithString:NSLocalizedString(@"Book details", nil)];
+    heading.font = [NSFont systemFontOfSize:22 weight:NSFontWeightSemibold];
+    NSTextField *intro = [NSTextField wrappingLabelWithString:NSLocalizedString(@"Turn your audio files into a book worth listening to.", nil)];
+    intro.textColor = NSColor.secondaryLabelColor;
+    NSStackView *details = [NSStackView stackViewWithViews:@[heading, intro]];
+    details.orientation = NSUserInterfaceLayoutOrientationVertical;
+    details.alignment = NSLayoutAttributeLeading;
+    details.spacing = 12;
+    details.translatesAutoresizingMaskIntoConstraints = NO;
+    [sidebar addSubview:details];
+    NSArray *labels = @[NSLocalizedString(@"Author", nil), NSLocalizedString(@"Title", nil), NSLocalizedString(@"Narrator", nil), NSLocalizedString(@"Genre", nil)];
+    for (NSUInteger i = 0; i < fields.count; i++) {
+        NSTextField *field = fields[i];
+        field.font = [NSFont systemFontOfSize:13];
+        field.placeholderString = labels[i];
+        field.accessibilityLabel = labels[i];
+        NSTextField *label = [NSTextField labelWithString:labels[i]];
+        label.font = [NSFont systemFontOfSize:11 weight:NSFontWeightSemibold];
+        label.textColor = NSColor.secondaryLabelColor;
+        [details addArrangedSubview:label];
+        [details setCustomSpacing:5 afterView:label];
+        if (field == genresField) {
+            NSStackView *genreRow = [NSStackView stackViewWithViews:@[field, genresButton]];
+            genreRow.spacing = 4;
+            [genresButton.widthAnchor constraintEqualToConstant:26].active = YES;
+            [details addArrangedSubview:genreRow];
+            [genreRow.widthAnchor constraintEqualToAnchor:details.widthAnchor].active = YES;
+        } else {
+            [details addArrangedSubview:field];
+            [field.widthAnchor constraintEqualToAnchor:details.widthAnchor].active = YES;
+        }
+        [field.heightAnchor constraintEqualToConstant:26].active = YES;
+    }
+    NSTextField *hint = [NSTextField wrappingLabelWithString:NSLocalizedString(@"Export as an M4B audiobook with chapters and cover art. Audio quality and volume length can be changed in Settings.", nil)];
+    hint.font = [NSFont systemFontOfSize:11];
+    hint.textColor = NSColor.secondaryLabelColor;
+    hint.translatesAutoresizingMaskIntoConstraints = NO;
+    [sidebar addSubview:hint];
+
+    tabs.tabViewType = NSNoTabsNoBorder;
+    tabs.translatesAutoresizingMaskIntoConstraints = NO;
+    [root addSubview:tabs];
+    NSView *filesView = [tabs tabViewItemAtIndex:0].view;
+    NSView *artView = [tabs tabViewItemAtIndex:1].view;
+    for (NSView *view in filesView.subviews.copy) [view removeFromSuperview];
+    scroll.translatesAutoresizingMaskIntoConstraints = NO;
+    scroll.borderType = NSNoBorder;
+    scroll.scrollerStyle = NSScrollerStyleOverlay;
+    fileListView.style = NSTableViewStyleFullWidth;
+    fileListView.rowHeight = 28;
+    fileListView.usesAlternatingRowBackgroundColors = YES;
+    [filesView addSubview:scroll];
+    _emptyState = [NSTextField wrappingLabelWithString:NSLocalizedString(@"Your audiobook starts here\nAdd audio files or drag them into this list.", nil)];
+    _emptyState.alignment = NSTextAlignmentCenter;
+    _emptyState.textColor = NSColor.secondaryLabelColor;
+    _emptyState.font = [NSFont systemFontOfSize:15];
+    _emptyState.translatesAutoresizingMaskIntoConstraints = NO;
+    [filesView addSubview:_emptyState];
+    coverImageView.translatesAutoresizingMaskIntoConstraints = NO;
+    [artView addSubview:coverImageView];
+
+    _sectionPicker = [NSSegmentedControl segmentedControlWithLabels:@[NSLocalizedString(@"Audio files", nil), NSLocalizedString(@"Cover art", nil)] trackingMode:NSSegmentSwitchTrackingSelectOne target:self action:@selector(selectSection:)];
+    _sectionPicker.selectedSegment = 0;
+    _sectionPicker.accessibilityLabel = NSLocalizedString(@"Audiobook section", nil);
+    _sectionPicker.translatesAutoresizingMaskIntoConstraints = NO;
+    _sectionPicker.segmentStyle = NSSegmentStyleAutomatic;
+    [root addSubview:_sectionPicker];
+    [NSLayoutConstraint activateConstraints:@[
+        [sidebar.leadingAnchor constraintEqualToAnchor:root.leadingAnchor],
+        [sidebar.topAnchor constraintEqualToAnchor:root.topAnchor],
+        [sidebar.bottomAnchor constraintEqualToAnchor:root.bottomAnchor],
+        [sidebar.widthAnchor constraintEqualToConstant:270],
+        [details.leadingAnchor constraintEqualToAnchor:sidebar.leadingAnchor constant:24],
+        [details.trailingAnchor constraintEqualToAnchor:sidebar.trailingAnchor constant:-24],
+        [details.topAnchor constraintEqualToAnchor:sidebar.topAnchor constant:28],
+        [hint.leadingAnchor constraintEqualToAnchor:details.leadingAnchor],
+        [hint.trailingAnchor constraintEqualToAnchor:details.trailingAnchor],
+        [hint.bottomAnchor constraintEqualToAnchor:sidebar.bottomAnchor constant:-24],
+        [hint.topAnchor constraintGreaterThanOrEqualToAnchor:details.bottomAnchor constant:24],
+        [_sectionPicker.topAnchor constraintEqualToAnchor:root.topAnchor constant:24],
+        [_sectionPicker.centerXAnchor constraintEqualToAnchor:tabs.centerXAnchor],
+        [_sectionPicker.widthAnchor constraintEqualToConstant:234],
+        [tabs.leadingAnchor constraintEqualToAnchor:sidebar.trailingAnchor constant:20],
+        [tabs.trailingAnchor constraintEqualToAnchor:root.trailingAnchor constant:-20],
+        [tabs.topAnchor constraintEqualToAnchor:_sectionPicker.bottomAnchor constant:24],
+        [tabs.bottomAnchor constraintEqualToAnchor:root.bottomAnchor constant:-20],
+        [scroll.leadingAnchor constraintEqualToAnchor:filesView.leadingAnchor],
+        [scroll.trailingAnchor constraintEqualToAnchor:filesView.trailingAnchor],
+        [scroll.topAnchor constraintEqualToAnchor:filesView.topAnchor],
+        [scroll.bottomAnchor constraintEqualToAnchor:filesView.bottomAnchor],
+        [_emptyState.centerXAnchor constraintEqualToAnchor:filesView.centerXAnchor],
+        [_emptyState.centerYAnchor constraintEqualToAnchor:filesView.centerYAnchor],
+        [_emptyState.widthAnchor constraintLessThanOrEqualToAnchor:filesView.widthAnchor constant:-40],
+        [coverImageView.centerXAnchor constraintEqualToAnchor:artView.centerXAnchor],
+        [coverImageView.centerYAnchor constraintEqualToAnchor:artView.centerYAnchor],
+        [coverImageView.widthAnchor constraintEqualToAnchor:artView.widthAnchor constant:-60],
+        [coverImageView.heightAnchor constraintEqualToAnchor:artView.heightAnchor constant:-60]
+    ]];
+    NSToolbar *toolbar = [[NSToolbar alloc] initWithIdentifier:@"AudiobookToolbar"];
+    toolbar.delegate = self;
+    toolbar.displayMode = NSToolbarDisplayModeIconAndLabel;
+    window.toolbar = toolbar;
+    [self updateEmptyState];
+    // The old nib stores a screen position that can be outside today's display bounds.
+    NSScreen *screen = window.screen ?: NSScreen.mainScreen;
+    if (screen) {
+        NSRect frame = window.frame;
+        frame.size.width = MIN(frame.size.width, screen.visibleFrame.size.width);
+        frame.size.height = MIN(frame.size.height, screen.visibleFrame.size.height);
+        [window setFrame:[window constrainFrameRect:frame toScreen:screen] display:NO];
+    }
+    [window center];
+}
+
+- (void)selectSection:(NSSegmentedControl *)sender
+{
+    [tabs selectTabViewItemAtIndex:sender.selectedSegment];
+}
+
+- (void)setToolbarItem:(NSString *)identifier enabled:(BOOL)enabled
+{
+    for (NSToolbarItem *item in self.window.toolbar.items)
+        if ([item.itemIdentifier isEqualToString:identifier]) item.enabled = enabled;
+}
+
+- (void)setCreateEnabled:(BOOL)enabled
+{
+    bindButton.enabled = enabled;
+    [self setToolbarItem:@"Create" enabled:enabled];
+}
+
+- (void)setPreviewEnabled:(BOOL)enabled
+{
+    playButton.enabled = enabled;
+    [self setToolbarItem:@"Preview" enabled:enabled];
+}
+
+- (void)setRemoveEnabled:(BOOL)enabled
+{
+    _removeButton.enabled = enabled;
+    [self setToolbarItem:@"Remove" enabled:enabled];
+}
+
+- (void)updateEmptyState
+{
+    _emptyState.hidden = fileList.hasFiles;
+    fileListView.usesAlternatingRowBackgroundColors = fileList.hasFiles;
+    [self setRemoveEnabled:fileListView.numberOfSelectedRows > 0];
+}
+
+- (void)updateSelection:(NSNotification *)notification
+{
+    [self setRemoveEnabled:fileListView.numberOfSelectedRows > 0];
+}
+
+- (NSArray<NSToolbarItemIdentifier> *)toolbarDefaultItemIdentifiers:(NSToolbar *)toolbar
+{
+    return @[@"Add", @"Remove", @"Preview", @"Artwork", NSToolbarFlexibleSpaceItemIdentifier, @"Create"];
+}
+
+- (NSArray<NSToolbarItemIdentifier> *)toolbarAllowedItemIdentifiers:(NSToolbar *)toolbar
+{
+    return [self toolbarDefaultItemIdentifiers:toolbar];
+}
+
+- (NSToolbarItem *)toolbar:(NSToolbar *)toolbar itemForItemIdentifier:(NSToolbarItemIdentifier)identifier willBeInsertedIntoToolbar:(BOOL)flag
+{
+    NSToolbarItem *item = [[NSToolbarItem alloc] initWithItemIdentifier:identifier];
+    NSDictionary *labels = @{@"Add": NSLocalizedString(@"Add Files", nil), @"Remove": NSLocalizedString(@"Remove", nil), @"Preview": NSLocalizedString(@"Preview", nil), @"Artwork": NSLocalizedString(@"Choose Cover", nil), @"Create": NSLocalizedString(@"Create Audiobook", nil)};
+    item.label = labels[identifier];
+    NSButton *button;
+    if ([identifier isEqualToString:@"Create"]) {
+        button = bindButton;
+        button.title = item.label;
+        button.image = [NSImage imageWithSystemSymbolName:@"book.closed" accessibilityDescription:nil];
+        button.imagePosition = NSImageLeading;
+        button.keyEquivalent = @"\r";
+    } else if ([identifier isEqualToString:@"Preview"]) {
+        button = playButton;
+    } else {
+        NSDictionary *symbols = @{@"Add": @"plus", @"Remove": @"minus", @"Artwork": @"photo"};
+        SEL action = [identifier isEqualToString:@"Add"] ? @selector(addFiles:) : ([identifier isEqualToString:@"Remove"] ? @selector(delFiles:) : @selector(setCover:));
+        button = [NSButton buttonWithImage:[NSImage imageWithSystemSymbolName:symbols[identifier] accessibilityDescription:item.label] target:self action:action];
+        if ([identifier isEqualToString:@"Remove"]) _removeButton = button;
+    }
+    button.bezelStyle = NSBezelStyleRounded;
+    button.controlSize = NSControlSizeRegular;
+    button.accessibilityLabel = item.label;
+    button.toolTip = item.label;
+    [button sizeToFit];
+    item.view = button;
+    item.autovalidates = NO;
+    item.enabled = button.enabled;
+    return item;
 }
 
 - (void)setupColumns {
@@ -277,7 +502,7 @@ enum abb_form_fields {
         NSMenuItem *item = [tableHeaderContextMenu addItemWithTitle:title action:@selector(contextMenuSelected:) keyEquivalent:@""];
         [item setTarget:self];
         [item setRepresentedObject:columnDefs[idx].id];
-        [item setState:columnDefs[idx].enabled?NSOnState:NSOffState];
+        [item setState:columnDefs[idx].enabled?NSControlStateValueOn:NSControlStateValueOff];
     }
     
     
@@ -358,20 +583,20 @@ enum abb_form_fields {
 
 - (IBAction) addFiles: (id)sender
 {
-    // Create the File Open Dialog class.
+    if (_converting) return;
     NSOpenPanel *openDlg = [NSOpenPanel openPanel];
     
     [openDlg setCanChooseFiles:YES];
     [openDlg setCanChooseDirectories:YES];
     [openDlg setAllowsMultipleSelection:YES];
 
-    if ( [openDlg runModal] == NSOKButton )
+    if ( [openDlg runModal] == NSModalResponseOK )
     {
         BOOL sortFiles = [[NSUserDefaults standardUserDefaults] boolForKey:kConfigSortAudioFiles];
         NSArray *urls;
         
         if (sortFiles)
-            urls = [[openDlg URLs] sortedArrayUsingComparator:^(id a, id b) {return [[a path] compare:[b path]];}];
+            urls = [[openDlg URLs] sortedArrayUsingComparator:^(id a, id b) {return [[a path] localizedStandardCompare:[b path]];}];
         else
             urls = [openDlg URLs];
         
@@ -397,11 +622,17 @@ enum abb_form_fields {
 - (IBAction) delFiles: (id)sender
 {
     
+    if (_converting) return;
     [fileList deleteSelected:fileListView];
 }
 
 - (IBAction) bind: (id)sender
 {    
+    if (_converting || !fileList.hasFiles) return;
+    [self.window makeFirstResponder:nil];
+    [self updateWindowTitle];
+    [self playStopIfNeeded];
+
     NSString *author = [authorField stringValue];
     NSString *title = [titleField stringValue];
     NSMutableString *filename = [NSMutableString string];
@@ -424,8 +655,7 @@ enum abb_form_fields {
     
 #ifdef APP_STORE_BUILD
     saveAsFilename.stringValue = filename;
-    [NSApp beginSheet:saveAsPanel modalForWindow:self.window
-        modalDelegate:self didEndSelector:NULL contextInfo:nil];
+    [self.window beginSheet:saveAsPanel completionHandler:nil];
 #else
     NSSavePanel *savePanel = [NSSavePanel savePanel];
     [savePanel setAccessoryView: nil];
@@ -438,12 +668,53 @@ enum abb_form_fields {
     
     
     /* if successful, save file under designated name */
-    if (choice == NSOKButton)
+    if (choice == NSModalResponseOK)
     {
-        [bindButton setEnabled:FALSE];
         outFile = [[savePanel URL] path];
-        _converting = YES;
-        [NSThread detachNewThreadSelector:@selector(bindToFileThread:) toTarget:self withObject:nil];
+        // A Save panel grants access to one file. Multiple volumes need a folder grant.
+        NSInteger hours = [[NSUserDefaults standardUserDefaults] integerForKey:kConfigMaxVolumeSize];
+        UInt64 total = 0;
+        for (AudioFile *file in fileList.files) total += file.duration.unsignedLongLongValue;
+        if (hours > 0 && hours < 25 && total > (UInt64)hours * 3600000) {
+            NSOpenPanel *folderPanel = [NSOpenPanel openPanel];
+            folderPanel.canChooseDirectories = YES;
+            folderPanel.canChooseFiles = NO;
+            folderPanel.canCreateDirectories = YES;
+            folderPanel.directoryURL = savePanel.directoryURL;
+            folderPanel.message = NSLocalizedString(@"This audiobook needs multiple volumes. Choose the folder where all volumes will be saved.", nil);
+            folderPanel.prompt = NSLocalizedString(@"Choose Export Folder", nil);
+            if ([folderPanel runModal] != NSModalResponseOK) return;
+            _destURL = folderPanel.URL;
+            [_destURL startAccessingSecurityScopedResource];
+            outFile = [_destURL.path stringByAppendingPathComponent:outFile.lastPathComponent];
+            NSMutableArray *existing = [NSMutableArray array];
+            NSUInteger volume = 0;
+            UInt64 duration = 0;
+            for (AudioFile *file in fileList.files) {
+                if (duration > 0 && duration + file.duration.unsignedLongLongValue > (UInt64)hours * 3600000) {
+                    volume++;
+                    duration = 0;
+                }
+                duration += file.duration.unsignedLongLongValue;
+            }
+            for (NSUInteger index = 0; index <= volume; index++) {
+                NSString *name = index == 0 ? outFile : [NSString stringWithFormat:@"%@-%lu.%@", outFile.stringByDeletingPathExtension, (unsigned long)index, outFile.pathExtension];
+                if ([NSFileManager.defaultManager fileExistsAtPath:name]) [existing addObject:name.lastPathComponent];
+            }
+            if (existing.count) {
+                NSAlert *alert = [NSAlert new];
+                alert.messageText = NSLocalizedString(@"Replace existing audiobook volumes?", nil);
+                alert.informativeText = [existing componentsJoinedByString:@"\n"];
+                [alert addButtonWithTitle:TEXT_CANCEL];
+                [alert addButtonWithTitle:TEXT_OVERWRITE];
+                if ([alert runModal] != NSAlertSecondButtonReturn) {
+                    [_destURL stopAccessingSecurityScopedResource];
+                    _destURL = nil;
+                    return;
+                }
+            }
+        }
+        [self startBinding];
     }
     
 #endif
@@ -470,7 +741,7 @@ enum abb_form_fields {
             [panel setCanCreateDirectories: YES];
             [panel setDirectoryURL:[NSURL fileURLWithPath:currentDest]];
             NSInteger result = [panel runModal];
-            if (result == NSOKButton)
+            if (result == NSModalResponseOK)
             {
                 _destURL = [panel URL];
                 destPath = [_destURL path];
@@ -498,7 +769,7 @@ enum abb_form_fields {
         [a addButtonWithTitle:TEXT_CANCEL];
         
         [a setMessageText:TEXT_FILE_EXISTS];
-        [a setAlertStyle:NSWarningAlertStyle];
+        [a setAlertStyle:NSAlertStyleWarning];
         [a setInformativeText: [NSString stringWithFormat:TEXT_FILE_OVERWRITE, outFile]];
         NSInteger result = [a runModal];
         if (result == NSAlertSecondButtonReturn) {
@@ -506,9 +777,7 @@ enum abb_form_fields {
         }
     }
     
-    [bindButton setEnabled:FALSE];
-    _converting = YES;
-    [NSThread detachNewThreadSelector:@selector(bindToFileThread:) toTarget:self withObject:nil];
+    [self startBinding];
 }
 
 - (IBAction) saveAsCancel:(id)sender
@@ -520,14 +789,14 @@ enum abb_form_fields {
 
 - (IBAction) setCover: (id)sender
 {
-    // Create the File Open Dialog class.
+    if (_converting) return;
     NSOpenPanel *openDlg = [NSOpenPanel openPanel];
     
     [openDlg setCanChooseFiles:YES];
     [openDlg setCanChooseDirectories:NO];
     [openDlg setAllowsMultipleSelection:NO];
     
-    if ( [openDlg runModal] == NSOKButton )
+    if ( [openDlg runModal] == NSModalResponseOK )
     {
         NSURL *url = [openDlg URL];
         
@@ -539,6 +808,7 @@ enum abb_form_fields {
             {
                 coverImageView.coverImageFilename = fileName;
                 [tabs selectTabViewItemAtIndex:1];
+                _sectionPicker.selectedSegment = 1;
             }
         }
         
@@ -582,30 +852,29 @@ enum abb_form_fields {
 - (void) bindingThreadIsDone:(id)sender
 {
     _converting = NO;
-#ifdef APP_STORE_BUILD
     if (_destURL) {
-        [_destURL startAccessingSecurityScopedResource];
+        [_destURL stopAccessingSecurityScopedResource];
         _destURL = nil;
     }
-#endif
     
-    BOOL notificationCenterIsAvailable = (NSClassFromString(@"NSUserNotificationCenter")!=nil);
-    if (_conversionResult && notificationCenterIsAvailable) {
-        NSUserNotification *notification = [[NSUserNotification alloc] init];
-        notification.title = TEXT_BOOK_IS_READY;
-        notification.subtitle = [outFile lastPathComponent];
-        notification.soundName = NSUserNotificationDefaultSoundName;
-        
-        [[NSUserNotificationCenter defaultUserNotificationCenter] deliverNotification:notification];
+    if (_conversionResult) {
+        NSAlert *alert = [NSAlert new];
+        alert.messageText = TEXT_BOOK_IS_READY;
+        alert.informativeText = outFile.lastPathComponent;
+        [alert addButtonWithTitle:NSLocalizedString(@"Show in Finder", nil)];
+        [alert addButtonWithTitle:NSLocalizedString(@"Done", nil)];
+        [alert beginSheetModalForWindow:self.window completionHandler:^(NSModalResponse response) {
+            if (response == NSAlertFirstButtonReturn)
+                [NSWorkspace.sharedWorkspace activateFileViewerSelectingURLs:@[[NSURL fileURLWithPath:self->outFile]]];
+        }];
     }
     
-    [bindButton setEnabled:TRUE];
+    [self setCreateEnabled:fileList.hasFiles];
 }
 
 - (void) showProgressPanel: (id) sender
 {
-    [NSApp beginSheet:progressPanel modalForWindow:self.window
-        modalDelegate:self didEndSelector:NULL contextInfo:nil];
+    [self.window beginSheet:progressPanel completionHandler:nil];
 }
 
 - (void) hideProgressPanel: (id) sender
@@ -614,20 +883,43 @@ enum abb_form_fields {
     [progressPanel orderOut:nil];
 }
 
+- (void)startBinding
+{
+    _converting = YES;
+    _conversionResult = NO;
+    [self setCreateEnabled:NO];
+    [_binder reset];
+    [_binder setDelegate:self];
+    [self showProgressPanel:nil];
+    [NSThread detachNewThreadSelector:@selector(bindToFileThread:) toTarget:self withObject:nil];
+}
+
 - (void)bindToFileThread:(id)object
 {
+    @autoreleasepool {
+        [self bindToFile];
+    }
+}
+
+- (void)bindToFile
+{
     NSString *coverImageFilename = nil;
-    NSImage *coverImage = coverImageView.coverImage;
+    __block NSData *convertedCover = nil;
+    __block NSString *sourceCover = nil;
+    dispatch_sync(dispatch_get_main_queue(), ^{
+        if ([self->coverImageView haveCover]) {
+            if ([self->coverImageView shouldConvert]) {
+                NSBitmapImageRep *image = [NSBitmapImageRep imageRepWithData:self->coverImageView.coverImage.TIFFRepresentation];
+                convertedCover = [image representationUsingType:NSBitmapImageFileTypePNG properties:@{}];
+            } else sourceCover = self->coverImageView.coverImageFilename;
+        }
+    });
     UInt64 maxVolumeDuration = 0;
     NSInteger hours = [[NSUserDefaults standardUserDefaults] integerForKey:kConfigMaxVolumeSize];
     if ((hours > 0) && (hours < 25))
         maxVolumeDuration = hours * 3600;
     
     NSLog(@"maxVolumeDuration == %lld", maxVolumeDuration);
-    _conversionResult = NO;
-    [_binder reset];
-    [_binder setDelegate:self];
-    
     // split output filename to base and extension in order to get
     // filenames for consecutive volume files
     NSString *outFileBase = [outFile stringByDeletingPathExtension];
@@ -661,6 +953,13 @@ enum abb_form_fields {
     
     BOOL onChapterBoundary = YES;
     for (AudioFile *file in files) {
+        if (maxVolumeDuration && file.duration.unsignedLongLongValue > maxVolumeDuration * 1000) {
+            [self volumeFailed:outFile reason:NSLocalizedString(@"An input file is longer than the maximum volume length. Increase the limit in Settings.", nil)];
+            [[StatsManager sharedInstance] removeConverter:self];
+            [self performSelectorOnMainThread:@selector(hideProgressPanel:) withObject:nil waitUntilDone:NO];
+            [self performSelectorOnMainThread:@selector(bindingThreadIsDone:) withObject:nil waitUntilDone:NO];
+            return;
+        }
         if (hasChapters) {
             if (![curChapter containsFile:file]) {
                 NSLog(@"%@ -> next chapter", file.filePath);
@@ -678,6 +977,7 @@ enum abb_form_fields {
                     [inputFiles removeAllObjects];
                     estVolumeDuration = 0;
                     totalVolumes++;
+                    if (hasChapters && onChapterBoundary) [curChapters removeLastObject];
                     currentVolumeName = [[NSString alloc] initWithFormat:@"%@-%d.%@",
                                          outFileBase, totalVolumes, outFileExt];
                     if (hasChapters) {
@@ -689,19 +989,6 @@ enum abb_form_fields {
                         curChapters = [[NSMutableArray alloc] init];
                         [curChapters addObject:curChapter];
                     }
-                }
-                else {
-                    dispatch_async(dispatch_get_main_queue(), ^{
-                        NSAlert *alert = [[NSAlert alloc] init];
-                        NSString *msg = [NSString stringWithFormat:TEXT_MAXDURATION_VIOLATED,
-                                     [file.filePath UTF8String], [file.duration intValue]/1000, maxVolumeDuration];
-                        [alert addButtonWithTitle:@"OK"];
-                        [alert setMessageText:TEXT_CANT_SPLIT];
-                        [alert setInformativeText:msg];
-                        [alert setAlertStyle:NSWarningAlertStyle];
-                        [alert runModal];
-                    });
-                    return;
                 }
             }
         }
@@ -721,7 +1008,6 @@ enum abb_form_fields {
     _binder.sampleRate = [[NSUserDefaults standardUserDefaults] floatForKey:kConfigSampleRate];
     _binder.bitrate = (UInt32)[[NSUserDefaults standardUserDefaults] integerForKey:kConfigBitrate];
     
-    [self performSelectorOnMainThread:@selector(showProgressPanel:) withObject:nil waitUntilDone:NO];
 
     [self updateProgress:0 total:100];
     dispatch_async(dispatch_get_main_queue(), ^{
@@ -734,92 +1020,68 @@ enum abb_form_fields {
     
     else
     {
-        if (![self.author isEqualToString:@""] ||
-            ![self.title isEqualToString:@""] || (coverImage != nil))
-        {
-            NSLog(@"Adding metadata, it may take a while...");
-            @try {
-                [self updateProgressString:TEXT_ADDING_TAGS];
-                BOOL temporaryFile = NO;
-                if ([coverImageView haveCover]) {
-                    if ([coverImageView shouldConvert]) {
-                        NSString *tempFileTemplate =
-                        [NSTemporaryDirectory() stringByAppendingPathComponent:@"coverimg.XXXXXX"];
-                        const char *tempFileTemplateCString =
-                        [tempFileTemplate fileSystemRepresentation];
-                        char *tempFileNameCString = (char *)malloc(strlen(tempFileTemplateCString) + 1);
-                        strcpy(tempFileNameCString, tempFileTemplateCString);
-                        if (mktemp(tempFileNameCString)) {
-                            coverImageFilename = [NSString stringWithCString:tempFileNameCString encoding:NSUTF8StringEncoding];
-                            NSData *imgData = [coverImage TIFFRepresentation];
-                            NSDictionary *dict = [[NSDictionary alloc] init];
-                            [[[NSBitmapImageRep imageRepWithData:imgData]
-                              representationUsingType:NSPNGFileType properties:dict]
-                             writeToFile:coverImageFilename atomically:YES];
-                            temporaryFile = YES;
-                        }
-                        else {
-                            NSLog(@"Failed to generate tmp filename");
-                        }
-                    }
-                    else {
-                        coverImageFilename = coverImageView.coverImageFilename;
-                    }
+        @try {
+            [self updateProgressString:TEXT_ADDING_TAGS];
+            BOOL temporaryFile = convertedCover != nil;
+            coverImageFilename = sourceCover;
+            if (convertedCover) {
+                coverImageFilename = [NSTemporaryDirectory() stringByAppendingPathComponent:[NSUUID.UUID.UUIDString stringByAppendingPathExtension:@"png"]];
+                if (![convertedCover writeToFile:coverImageFilename atomically:YES])
+                    [NSException raise:@"MetadataError" format:@"Could not save cover artwork"];
+            }
+
+            int track = 1;
+            NSArray *volumes = [_binder volumes];
+            for (AudioBookVolume *v in volumes) {
+                NSString *volumeName = v.filename;
+                MP4File *mp4 = [[MP4File alloc] initWithFileName:volumeName];
+                mp4.artist = self.author;
+                if ([volumes count] > 1) {
+                    mp4.title = [NSString stringWithFormat:@"%@ #%02d", self.title, track];
+                    mp4.gaplessPlay = YES;
                 }
-                
-                
-                int track = 1;
-                NSArray *volumes = [_binder volumes];
+                else
+                    mp4.title = self.title;
+                mp4.narrator = self.actor;
+                mp4.album = self.title;
+                mp4.genre = self.genre;
+                if (coverImageFilename)
+                    [mp4 setCoverFile:coverImageFilename];
+                mp4.track = track;
+                mp4.tracksTotal = [volumes count];
+                if (![mp4 updateFile]) [NSException raise:@"MetadataError" format:@"Could not write metadata to %@", volumeName];
+                track ++;
+            }
+
+            if ((coverImageFilename != nil) && temporaryFile) {
+                NSLog(@"Unlink %@", coverImageFilename);
+                [[NSFileManager defaultManager] removeItemAtPath:coverImageFilename
+                                                           error:nil];
+            }
+
+            if ([fileList chapterMode]) {
+                [self updateProgressString:TEXT_ADDING_CHAPTERS];
+                int idx = 0;
                 for (AudioBookVolume *v in volumes) {
-                    NSString *volumeName = v.filename;
-                    MP4File *mp4 = [[MP4File alloc] initWithFileName:volumeName];
-                    mp4.artist = self.author;
-                    if ([volumes count] > 1) {
-                        mp4.title = [NSString stringWithFormat:@"%@ #%02d", self.title, track];
-                        mp4.gaplessPlay = YES;
-                    }
-                    else
-                        mp4.title = self.title;
-                    mp4.narrator = self.actor;
-                    mp4.album = self.title;
-                    mp4.genre = self.genre;
-                    if (coverImageFilename)
-                        [mp4 setCoverFile:coverImageFilename];
-                    mp4.track = track;
-                    mp4.tracksTotal = [volumes count];
-                    [mp4 updateFile];
-                    track ++;
+                    if (addChapters([v.filename fileSystemRepresentation], [volumeChapters objectAtIndex:idx]) != 0)
+                        [NSException raise:@"MetadataError" format:@"Could not write chapters to %@", v.filename];
+                    idx++;
                 }
-                
-                if ((coverImageFilename != nil) && temporaryFile) {
-                    NSLog(@"Unlink %@", coverImageFilename);
-                    [[NSFileManager defaultManager] removeItemAtPath:coverImageFilename
-                                                               error:nil];
-                }
-                
-                if ([fileList chapterMode]) {
-                    [self updateProgressString:TEXT_ADDING_CHAPTERS];
-                    int idx = 0;
-                    for (AudioBookVolume *v in volumes) {
-                        addChapters([v.filename UTF8String], [volumeChapters objectAtIndex:idx]);
-                        idx++;
-                    }
-                    
-                }
-                
-                [self updateProgressString:@"Done"];
                 
             }
-            @catch (NSException *e) {
-                NSLog(@"Something went wrong");
-            }
+
+            [self updateProgressString:@"Done"];
+
         }
-        
-        // write chapters
+        @catch (NSException *e) {
+            _conversionResult = NO;
+            [self volumeFailed:outFile reason:e.reason];
+            if (convertedCover && coverImageFilename) [[NSFileManager defaultManager] removeItemAtPath:coverImageFilename error:nil];
+        }
     }
 
     [[StatsManager sharedInstance] removeConverter:self];
-       [self performSelectorOnMainThread:@selector(hideProgressPanel:) withObject:nil waitUntilDone:NO];
+    [self performSelectorOnMainThread:@selector(hideProgressPanel:) withObject:nil waitUntilDone:NO];
     [self performSelectorOnMainThread:@selector(bindingThreadIsDone:) withObject:nil waitUntilDone:NO];
 }
 
@@ -882,7 +1144,7 @@ enum abb_form_fields {
         [alert addButtonWithTitle:@"OK"];
         [alert setMessageText:TEXT_CONVERSION_FAILED];
         [alert setInformativeText:reason];
-        [alert setAlertStyle:NSWarningAlertStyle];
+        [alert setAlertStyle:NSAlertStyleWarning];
         [alert runModal];
     });
     return NO;
@@ -896,7 +1158,7 @@ enum abb_form_fields {
         [alert addButtonWithTitle:@"OK"];
         [alert setMessageText:TEXT_BINDING_FAILED];
         [alert setInformativeText:reason];
-        [alert setAlertStyle:NSWarningAlertStyle];
+        [alert setAlertStyle:NSAlertStyleWarning];
         [alert runModal];
     });
 }
@@ -929,10 +1191,20 @@ enum abb_form_fields {
     [_binder cancel];
 }
 
+- (void)playStopIfNeeded
+{
+    if (_sound.isPlaying) [self playStop:nil];
+}
+
 - (IBAction) playStop: (id)sender
 {
     if ((_sound != nil) && [_sound isPlaying]) {
         [_sound stop];
+        _sound.delegate = nil;
+        _sound = nil;
+        [playButton setImage:_playImg];
+        playButton.accessibilityLabel = NSLocalizedString(@"Preview", nil);
+        [self setPreviewEnabled:fileList.canPlay];
         return;
     }
     
@@ -942,15 +1214,17 @@ enum abb_form_fields {
     id item = [[fileListView selectedItems] objectAtIndex:0];
     if ([item isKindOfClass:[AudioFile class]]) {
         AudioFile *file = (AudioFile *)item;
-        [playButton setImage:_stopImg] ;
+        [playButton setImage:_stopImg];
+        playButton.accessibilityLabel = NSLocalizedString(@"Stop preview", nil);
         
         _playingFile = [file.filePath copy];
         _sound = [[NSSound alloc] initWithContentsOfFile:file.filePath byReference:NO];
         [_sound setDelegate:self];
         if (![_sound play]) {
-            [playButton setImage:_playImg] ;
+            [playButton setImage:_playImg];
+            playButton.accessibilityLabel = NSLocalizedString(@"Preview", nil);
             _sound = nil;
-            [playButton setEnabled:fileList.canPlay];
+            [self setPreviewEnabled:fileList.canPlay];
             [self playFailed];
         }
     }
@@ -958,9 +1232,15 @@ enum abb_form_fields {
 
 - (void)sound:(NSSound *)sound didFinishPlaying:(BOOL)finishedPlaying
 {
-    [playButton setImage:_playImg] ;
+    if (![NSThread isMainThread]) {
+        dispatch_async(dispatch_get_main_queue(), ^{ [self sound:sound didFinishPlaying:finishedPlaying]; });
+        return;
+    }
+    if (sound != _sound) return;
+    [playButton setImage:_playImg];
+    playButton.accessibilityLabel = NSLocalizedString(@"Preview", nil);
     _sound = nil;
-    [playButton setEnabled:fileList.canPlay];
+    [self setPreviewEnabled:fileList.canPlay];
 }
 
 - (void) playFailed
@@ -970,7 +1250,7 @@ enum abb_form_fields {
     [alert addButtonWithTitle:@"OK"];
     [alert setMessageText:TEXT_FAILED_TO_PLAY];
     [alert setInformativeText:msg];
-    [alert setAlertStyle:NSWarningAlertStyle];
+    [alert setAlertStyle:NSAlertStyleWarning];
     [alert runModal];
 }
 
@@ -979,8 +1259,8 @@ enum abb_form_fields {
 - (void)contextMenuSelected:(id)sender
 {
     NSMenuItem *item = sender;
-    if (item.state == NSOffState) {
-        [item setState:NSOnState];
+    if (item.state == NSControlStateValueOff) {
+        [item setState:NSControlStateValueOn];
         
         BOOL found = NO;
         int idx;
@@ -1003,7 +1283,7 @@ enum abb_form_fields {
         if (c) {
             [fileListView removeTableColumn:c];
         }
-        [item setState:NSOffState];
+        [item setState:NSControlStateValueOff];
     }
     
 }
@@ -1051,11 +1331,12 @@ enum abb_form_fields {
     //because we may also be observing other things
     if(context == KVO_CONTEXT_CANPLAY_CHANGED){
         if (_sound == nil) {
-            [playButton setEnabled:fileList.canPlay];
+            [self setPreviewEnabled:fileList.canPlay];
         }
     }
     else if(context == KVO_CONTEXT_HASFILES_CHANGED){
-        [bindButton setEnabled:fileList.hasFiles];
+        [self setCreateEnabled:fileList.hasFiles && !_converting];
+        [self updateEmptyState];
     }
     else if (context == KVO_CONTEXT_COMMONAUTHOR_CHANGED) {
         NSString *author = [authorField stringValue];
@@ -1131,7 +1412,7 @@ enum abb_form_fields {
     [panel setCanChooseDirectories: YES];
     [panel setCanCreateDirectories: YES];
     [panel beginSheetModalForWindow:saveAsPanel completionHandler:^(NSInteger result) {
-        if (result == NSFileHandlingPanelOKButton) {
+        if (result == NSModalResponseOK) {
             NSURL *folderURL = [panel URL];
             NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
 

@@ -28,6 +28,13 @@
 #ifndef __METAEDITOR__
 #define __METAEDITOR__
 
+#import <Foundation/Foundation.h>
+#ifdef __cplusplus
+extern "C" {
+#endif
 int addChapters(const char *mp4, NSArray *chapters);
+#ifdef __cplusplus
+}
+#endif
 
 #endif // __METAEDITOR__

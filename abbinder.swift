@@ -39,7 +39,7 @@ struct abbinder: ParsableCommand {
             help: ArgumentHelp("book author", valueName: "author"))
     var bookAuthor: String = ""
     @Option(name: .short,
-            help: ArgumentHelp("set bitrate (KBps)", valueName: "bitrate"))
+            help: ArgumentHelp("set bitrate (kbps)", valueName: "bitrate"))
     var bitrate: Int32?
     @Option(name: .short,
             help: ArgumentHelp("number of channels in audiobook", valueName: "channels"))
@@ -96,9 +96,15 @@ struct abbinder: ParsableCommand {
             throw ValidationError("invalid samplerate(-r) \(samplerate). Valid values: \(abbinder.validRates)")
         }
         if (channels != 1) && (channels != 2) {
-            throw ValidationError("invalid number of channels(-c) \(samplerate). Valid values: [1, 2]")
+            throw ValidationError("invalid number of channels(-c) \(channels). Valid values: [1, 2]")
         }
-        if fileChaptersEmptyTemplate && !(fileChapterTemplate ?? "").isEmpty {
+        if let bitrate, bitrate <= 0 || bitrate > Int32(UInt32.max / 1000) {
+            throw ValidationError("bitrate must be a positive number of kbps")
+        }
+        if let hours = maxVolumeDuration, hours == 0 || hours > UInt64.max / 3_600_000 {
+            throw ValidationError("volume duration must be a positive number of hours")
+        }
+        if fileChaptersEmptyTemplate && fileChapterTemplate != nil {
             throw ValidationError("can not combine -e and -E options")
         }
     }
@@ -107,7 +113,7 @@ struct abbinder: ParsableCommand {
         print(
             "Usage: \(cmd) [-Aehqsv] [-c 1|2] [-r samplerate] [-a author] [-t title] [-i filelist] -o outfile [@chapter_1@ infile @chapter_2@ ...]"
         )
-        print("\t-b bitrate\tset bitrate (KBps)")
+        print("\t-b bitrate\tset bitrate (kbps)")
         print("\t-c 1|2\t\tnumber of channels in audiobook. Default: 2")
         print("\t-C file.png\tcover image")
         print("\t-e\t\talias for -E ''")
@@ -150,7 +156,10 @@ struct abbinder: ParsableCommand {
                 let content: String
                 if listFile == "-" {
                     let stdinData = FileHandle.standardInput.readDataToEndOfFile()
-                    content = String(data: stdinData, encoding: .utf8)!
+                    guard let text = String(data: stdinData, encoding: .utf8) else {
+                        throw ValidationError("input list must be UTF-8")
+                    }
+                    content = text
                 } else {
                     content = try String(contentsOfFile: listFile, encoding: .utf8)
                 }
@@ -161,7 +170,7 @@ struct abbinder: ParsableCommand {
             }
         }
 
-        if inputFilenames.isEmpty {
+        if inputFilenames.allSatisfy({ $0.isEmpty }) {
             errPrint("No input file specified")
             throw ExitCode.failure
         }
@@ -194,7 +203,7 @@ struct abbinder: ParsableCommand {
 
         // split output filename to base and extension in order to get
         // filenames for consecutive volume files
-        let outFileBase = URL(fileURLWithPath: outFile).deletingPathExtension()
+        let outFileBase = URL(fileURLWithPath: outFile).deletingPathExtension().path
         let outFileExt = URL(fileURLWithPath: outFile).pathExtension
 
         // create implicit first chapter. It wil be overriden
@@ -202,6 +211,7 @@ struct abbinder: ParsableCommand {
         var estTotalDuration: UInt64 = 0
         var currentVolumeName = outFile
         var totalVolumes = 0
+        let maxDurationSeconds = maxVolumeDuration.map { $0 * 3600 }
         var curChapter = Chapter()
         for path in inputFilenames {
             if path.isEmpty {
@@ -209,7 +219,7 @@ struct abbinder: ParsableCommand {
             }
 
             // is it chapter marker?
-            if path.count > 2 && path.hasPrefix("@") && path.hasSuffix("@") {
+            if path.count >= 2 && path.hasPrefix("@") && path.hasSuffix("@") {
                 let chapterName = String(path.dropFirst().dropLast())
                 curChapter = Chapter()
                 if verbose {
@@ -231,7 +241,11 @@ struct abbinder: ParsableCommand {
                 }
                 throw ExitCode.failure
             }
-            if let maxDuration = maxVolumeDuration,
+            if let maxDuration = maxDurationSeconds, UInt64(file.duration.intValue) > maxDuration * 1000 {
+                errPrint("\(path) is longer than the maximum volume duration\n")
+                throw ExitCode.failure
+            }
+            if let maxDuration = maxDurationSeconds,
                (estTotalDuration + UInt64(file.duration.intValue)) > maxDuration * 1000 {
                 if !inputFiles.isEmpty {
                     binder.addVolume(currentVolumeName, files: inputFiles)
@@ -240,7 +254,7 @@ struct abbinder: ParsableCommand {
                     totalVolumes += 1
                     currentVolumeName = "\(outFileBase)-\(totalVolumes).\(outFileExt)"
                     // restart chapter
-                    volumeChapters.append(currentChapters)
+                    volumeChapters.append(currentChapters.filter { $0.totalFiles() > 0 })
                     currentChapters = []
                     let c = Chapter()
                     c.name = curChapter.name
@@ -282,7 +296,7 @@ struct abbinder: ParsableCommand {
         // Add last volume to the binder
         binder.addVolume(currentVolumeName, files: inputFiles)
         // add chapters for last volume
-        volumeChapters.append(currentChapters)
+        volumeChapters.append(currentChapters.filter { $0.totalFiles() > 0 })
 
         binder.channels = channels
         binder.sampleRate = Float(samplerate)
@@ -318,6 +332,7 @@ struct abbinder: ParsableCommand {
         delegate.verbose = verbose
         delegate.skipErrors = skipErrors
         binder.setDelegate(delegate)
+        defer { withExtendedLifetime(delegate) {} }
 
         if !binder.convert() {
             print("Conversion failed")
@@ -343,14 +358,17 @@ struct abbinder: ParsableCommand {
                 mp4.genre = bookGenre
             }
             mp4.gaplessPlay = totalTracks > 1
-            mp4.update()
+            guard mp4.update() else {
+                errPrint("Failed to write metadata to \(v.filename!)\n")
+                throw ExitCode.failure
+            }
         }
 
         if !quiet {
             print("done")
         }
 
-        if !currentChapters.isEmpty {
+        if withChapters {
             if !quiet {
                 print(
                     "Adding chapter markers, it may take a while...",
@@ -359,7 +377,10 @@ struct abbinder: ParsableCommand {
                 fflush(stdout)
             }
             for (v, chapters) in zip(volumes.compactMap({ $0 as? AudioBookVolume }), volumeChapters) {
-                addChapters(v.filename, chapters)
+                guard addChapters(v.filename, chapters) == 0 else {
+                    errPrint("Failed to write chapters to \(v.filename!)\n")
+                    throw ExitCode.failure
+                }
             }
             if !quiet {
                 print("done")

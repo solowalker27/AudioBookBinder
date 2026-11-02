@@ -1,10 +1,84 @@
+AudioBookBinder — macOS modernization
+====================================
+
+Requires macOS 13 or later. Build with Xcode 26 or later (macOS 26 SDK).
+Liquid Glass uses the native AppKit toolbar and segmented control appearance
+on macOS 26+. Older supported systems use their native control appearance.
+The app follows the system's appearance and accessibility settings.
+
+Build and test
+--------------
+
+    git submodule update --init --recursive
+    ./scripts/test.sh
+
+If Xcode lives elsewhere, set DEVELOPER_DIR to its Contents/Developer folder.
+The script builds universal arm64/x86_64 GUI and CLI executables, runs real AAC
+encoding/decoding tests, checks Unicode metadata, artwork and QuickTime
+chapters, and tests cancellation, input protection, failed conversions, and
+hour-based volume splitting. Use CONFIGURATION=Debug for a debug build.
+Optional ffprobe checks independently inspect chapter timing and metadata.
+No testing frameworks or third-party Python packages are required.
+
+Build products:
+    build/DerivedData/Build/Products/Release/AudioBookBinder.app
+    build/DerivedData/Build/Products/Release/abbinder
+
+The test script disables signing so CI needs no developer account. For a
+sandboxed local app, build in Xcode using its ad-hoc signing setting, or sign
+the generated app locally:
+
+    codesign --force --sign - --options runtime \
+      --entitlements AudioBookBinder.entitlements \
+      build/DerivedData/Build/Products/Release/AudioBookBinder.app
+
+Distribution still requires your own Developer ID signing and notarization.
+
+Using the app
+-------------
+
+Add audio files or drag files/folders into the list. Edit the book details in
+the sidebar, arrange chapters using the Chapters menu, and choose artwork
+with Choose Cover or the Cover art tab. Expand a chapter and select its audio
+file to preview it. Create Audiobook opens the native Save panel. If the book
+needs multiple volumes, choose an export folder to authorize writing all of
+them. Audio quality and volume duration are available in Settings.
+
+To edit an existing .m4b, choose File > Edit Audiobook Metadata… (Shift-Command-O).
+The editor loads its title, author, narrator, album, genre, and embedded cover.
+Edit or clear those fields, choose a PNG/JPEG cover or remove the current one,
+then click Save (Command-S). In the Chapters tab, edit chapter titles and start
+times, add a marker by splitting the selected chapter, or remove selected
+markers. Times accept HH:MM:SS.mmm, MM:SS.mmm, or seconds; the first marker is
+always at zero and the last chapter runs to the end of the audio. Removing a
+marker merges its interval into the preceding chapter; removing the first
+marker extends the next chapter back to zero. Removing all markers clears the
+book’s chapters. Chapters are saved in their existing QuickTime/Nero formats;
+books without markers get QuickTime chapters when chapters are added.
+
+Saving replaces the selected file without re-encoding audio or changing volume
+numbers or unrelated tags. Chapters remain intact unless edited in their tab.
+Closing or quitting prompts for unsaved changes; Don’t Save leaves the file intact.
+Edits are staged in a temporary copy, so a failed metadata write leaves the
+original intact. If another app changes the file while it is open, reopen it
+before saving. Large books need enough free space for a temporary copy.
+
+Conversion stages all volumes before replacing any outputs. A failed or
+cancelled conversion preserves existing destination files. Inputs cannot be
+used as outputs, including symlink and hard-link aliases. Metadata/chapter
+errors are reported instead of announcing success.
+
+Validation on October 25, 2026: Xcode 27.1 / macOS SDK 27.0, Apple silicon,
+macOS 27.0.1. Both architectures compile; older macOS versions and Intel
+hardware require separate runtime testing. See TESTING.md for recorded checks.
+
 = Command line utility: abbinder 
 As of 1.18 it's part of main bundler. Path to the utility is:
-    AudioBookBinder.app/Contents/MacOS/abbinder
+    build/DerivedData/Build/Products/Release/abbinder
 
 == Usage
 abbinder [-hsv] [-c 1|2] [-r samplerate] [-a author] [-t title] 
-  [-i filelist] outfile [@chapter_1@ infile @chapter_2@ ...]
+  [-i filelist] -o outfile [@chapter_1@ infile @chapter_2@ ...]
         -a author       set book author
         -c 1|2          number of channels in audiobook. Default: 2
         -C file.png     cover image
@@ -30,7 +104,7 @@ Chapters could be set either by chapter markers in file list or by
 treating each source file as a chapter.  In former case chapter name is
 provided by user and should be enclosed in '@' characters to distinguish
 it from file names. e.g.:
-    abbinder book.m4b '@Chapter 1@' track01.mp3 '@Chapter 2@' track02.mp3
+    abbinder -o book.m4b '@Chapter 1@' track01.mp3 '@Chapter 2@' track02.mp3
 
 Chapter names in the latter case are generated for each input file and 
 may contain some escaped sequences that would be expanded when creating 
@@ -41,24 +115,24 @@ Available sequences:
     %t - value of 'title' tag from source file
 
 So previous example could be rewritten like:
-    abbinder -E 'Chapter %N' track01.mp3 track02.mp3
+    abbinder -o book.m4b -E 'Chapter %N' track01.mp3 track02.mp3
 
 == Examples
 
 Convert one file to m4b
-  bash$ abbinder book.m4b myfile.mp3
+  bash$ abbinder -o book.m4b myfile.mp3
 
 Convert several files to mono m4b with sample rate 8000
-  bash$ abbinder -r 8000 -c 1 book.m4b myfile.mp3 myfile2.mp3
+  bash$ abbinder -r 8000 -c 1 -o book.m4b myfile.mp3 myfile2.mp3
 
 Convert all mp3 files in directory and set author, title and cover image
   bash$ find ./dir -name '*mp3' > list
-  bash$ abbinder -i list -a Author -t Title -C ~/cover.png out.m4b
+  bash$ abbinder -i list -a Author -t Title -C ~/cover.png -o out.m4b
 
 Convert three-chapter book with explicit chapter names:
-  bash$ abbinder book.m4b '@The very beginning@' 01.mp3 \
+  bash$ abbinder -o book.m4b '@The very beginning@' 01.mp3 \
       '@In the middle of something@' 02.mp3 \
       '@Ashes to ashes and dust to dust@' 03.mp3
 
 Convert several short-stories files and make each of them a chapter
-  bash$ abbinder -E '%t' story01.mp3 story02.mp3 story03.mp3
+  bash$ abbinder -o stories.m4b -E '%t' story01.mp3 story02.mp3 story03.mp3
