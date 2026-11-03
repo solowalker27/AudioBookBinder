@@ -29,42 +29,46 @@
 
 #include <mp4v2/mp4v2.h>
 #import "Chapter.h"
+#import "MP4File.h"
 
 using namespace std;
 
 int addChapters(const char *mp4, NSArray *chapters)
 {
-    NSUInteger numChapters = [chapters count];
-    if (numChapters == 0)
-        return (0);
-    
+    // Flatten file-relative imports into the existing chapter timeline. A marker
+    // at a group boundary replaces its generated name, avoiding a zero interval.
+    NSMutableArray<MP4Chapter *> *markers = [NSMutableArray array];
+    uint64_t offset = 0;
+    for (Chapter *chapter in chapters) {
+        if (!chapter.files.count) continue;
+        [markers addObject:[[MP4Chapter alloc] initWithTitle:chapter.name ?: @"" startMilliseconds:offset]];
+        for (AudioFile *file in chapter.files) {
+            for (MP4Chapter *marker in file.chapterMarkers) {
+                if (marker.startMilliseconds >= file.duration.unsignedLongLongValue) return -1;
+                uint64_t start = offset + marker.startMilliseconds;
+                if (markers.lastObject.startMilliseconds == start) [markers removeLastObject];
+                [markers addObject:[[MP4Chapter alloc] initWithTitle:marker.title startMilliseconds:start]];
+            }
+            offset += file.duration.unsignedLongLongValue;
+        }
+    }
+    NSUInteger numChapters = markers.count;
+    if (!numChapters) return 0;
+    if (numChapters > UINT32_MAX) return -1;
+    for (NSUInteger i = 0; i < numChapters; i++) {
+        MP4Chapter *marker = markers[i];
+        NSData *title = [marker.title dataUsingEncoding:NSUTF8StringEncoding];
+        uint64_t end = i + 1 < numChapters ? markers[i + 1].startMilliseconds : offset;
+        if (end <= marker.startMilliseconds || !title || title.length > MP4V2_CHAPTER_TITLE_MAX ||
+            (title.length && memchr(title.bytes, 0, title.length))) return -1;
+    }
+
     MP4FileHandle h = MP4Modify( mp4 );
     
     if( h == MP4_INVALID_FILE_HANDLE )
         return -1;
 
     
-    MP4TrackId refTrackId = MP4_INVALID_TRACK_ID;
-    uint32_t trackCount = MP4GetNumberOfTracks( h );
-
-    for( uint32_t i = 0; i < trackCount; ++i ) {
-        MP4TrackId    id = MP4FindTrackId( h, i );
-        const char* type = MP4GetTrackType( h, id );
-        if( MP4_IS_AUDIO_TRACK_TYPE( type ) ) {
-            refTrackId = id;
-            break;
-        }
-    }
-    
-    if( !MP4_IS_VALID_TRACK_ID(refTrackId) ) {
-        MP4Close(h);
-        return -1;
-    }
-
-    MP4Duration trackDuration = MP4GetTrackDuration( h, refTrackId ); 
-    uint32_t trackTimeScale = MP4GetTrackTimeScale( h, refTrackId );
-
-    trackDuration /= trackTimeScale;
     MP4Chapter_t *mp4chapters;
     
     mp4chapters = (MP4Chapter_t*)malloc(numChapters * sizeof(MP4Chapter_t));
@@ -72,16 +76,15 @@ int addChapters(const char *mp4, NSArray *chapters)
         MP4Close(h);
         return -1;
     }
-    int i = 0;
-    for (Chapter *chapter in chapters) {
+    for (NSUInteger i = 0; i < numChapters; i++) {
+        MP4Chapter *marker = markers[i];
         MP4Chapter_t *chap = &mp4chapters[i];
         memset(chap, 0, sizeof(*chap));
-        chap->duration = [chapter totalDuration];
-        strncpy(chap->title,
-                [chapter.name UTF8String], sizeof(chap->title)-1);
-        i++;
+        uint64_t end = i + 1 < numChapters ? markers[i + 1].startMilliseconds : offset;
+        chap->duration = end - marker.startMilliseconds;
+        memcpy(chap->title, marker.title.UTF8String, [marker.title lengthOfBytesUsingEncoding:NSUTF8StringEncoding]);
     }
-    
+
     MP4ChapterType result = MP4SetChapters(h, mp4chapters, (uint32_t)numChapters, MP4ChapterTypeQt);
     free(mp4chapters);
     MP4Close(h);

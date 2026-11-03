@@ -4,6 +4,7 @@
 #import "AudioBinder.h"
 #import "AudioBookVolume.h"
 #import "Chapter.h"
+#import "ChapterList.h"
 #import "MetaEditor.h"
 #import "MP4File.h"
 #import "MP4Atom.h"
@@ -289,6 +290,59 @@ static void VerifyChapterEditing(NSString *dir) {
     Check([AudioSamples(book) isEqual:samples], @"Nero and dual-format saves preserve compressed audio");
 }
 
+static void VerifyChapterImport(NSString *dir) {
+    NSError *error = nil;
+    NSArray<MP4Chapter *> *labels = [ChapterList chaptersFromText:@"\uFEFF0.000000\t0.000000\tOpening — 日本語\r\n0.500000\t0.750000\tNext\r\n" duration:1250 error:&error];
+    Check(labels.count == 2 && labels[1].startMilliseconds == 500 && [labels[0].title isEqual:@"Opening — 日本語"], @"Import Audacity labels, UTF-8 BOM and CRLF");
+    NSString *ff = @";FFMETADATA1\ntitle=Ignored\n[CHAPTER]\nTIMEBASE=1/1000\nSTART=0\nEND=500\ntitle=Opening \\#1 \\= \\; \\\\ \\\ncontinued\n[STREAM]\ntitle=Ignored\n[CHAPTER]\nSTART=500000000\nEND=1250000000\ntitle=Next\n";
+    NSArray<MP4Chapter *> *chapters = [ChapterList chaptersFromText:ff duration:1250 error:&error];
+    Check(chapters.count == 2 && chapters[1].startMilliseconds == 500, @"Import FFmpeg chapters with explicit and default timebases");
+    Check([chapters[0].title isEqual:@"Opening #1 = ; \\ \ncontinued"], @"FFmpeg escapes and continued lines preserve title text");
+    Check([ChapterList chaptersFromText:@"0.000000\t0.000000\n0.500499\t0.500499\tRounded" duration:1250 error:&error][1].startMilliseconds == 500, @"Audacity times round to millisecond precision");
+    for (NSString *bad in @[@"", @"Chapter 1", @"0\t0\tFirst\n0\t0\tDuplicate", @"1\t1\tLate first", @"0\t0\tFirst\n1.25\t1.25\tPast end", @"0\t2\tRegion past end", @"0\t0\n0.000001\t0.000001", @"0\t0\n-1\t0", @"0,5\t0,5", @";FFMETADATA1\n[CHAPTER]\nSTART=0\nEND=1\nTIMEBASE=1/0", @";FFMETADATA1\n[CHAPTER]\nSTART=0\nSTART=1\nEND=1000", @";FFMETADATA1\n[CHAPTER]\nSTART=0", @";FFMETADATA1\n[CHAPTER]\nTIMEBASE=9999999999999999999/1\nSTART=0\nEND=9999999999999999999"]) {
+        error = nil;
+        Check(![ChapterList chaptersFromText:bad duration:1250 error:&error] && error, @"Invalid chapter list fails with an error");
+    }
+    AudioFile *longSource = [[AudioFile alloc] initWithPath:[dir stringByAppendingPathComponent:@"import-duration.wav"]];
+    Check(longSource.valid && (uint64_t)llround(longSource.sourceDuration.doubleValue) == 48754049, @"Read the original duration of a real 13-hour source fixture");
+    NSString *longList = @";FFMETADATA1\n[CHAPTER]\nTIMEBASE=1/1000\nSTART=0\nEND=48722618\ntitle=Opening\n[CHAPTER]\nTIMEBASE=1/1000\nSTART=48722618\nEND=48754049\ntitle=Closing\n";
+    // This is the duration recorded by the old float calculation after encoding.
+    longSource.duration = @48754048;
+    Check(![ChapterList chaptersFromText:longList duration:longSource.duration.unsignedLongLongValue error:&error], @"Reproduce the old one-millisecond-short import rejection");
+    Check([ChapterList chaptersFromText:longList duration:(uint64_t)llround(longSource.sourceDuration.doubleValue) error:&error].count == 2, @"Reimport a long chapter list against preserved source duration");
+    NSString *badUTF8 = [dir stringByAppendingPathComponent:@"invalid-labels.txt"];
+    unsigned char byte = 0xff;
+    [[NSData dataWithBytes:&byte length:1] writeToFile:badUTF8 atomically:YES];
+    Check(![ChapterList chaptersFromURL:[NSURL fileURLWithPath:badUTF8] duration:1250 error:&error], @"Chapter imports reject invalid UTF-8");
+
+    NSString *book = [dir stringByAppendingPathComponent:@"second.m4b"];
+    NSArray *samples = AudioSamples(book);
+    AudioFile *file = [[AudioFile alloc] initWithPath:[dir stringByAppendingPathComponent:@"mono.wav"]];
+    NSNumber *sourceDuration = file.sourceDuration;
+    file.duration = @(file.duration.unsignedLongLongValue - 1);
+    Check([file.sourceDuration isEqual:sourceDuration], @"Output duration updates preserve original source duration for later chapter imports");
+    Check([ChapterList chaptersFromText:@"0\t1.250000\tWhole recording" duration:(uint64_t)llround(file.sourceDuration.doubleValue) error:&error] != nil, @"Reimport validates against the rounded source duration after conversion");
+    file.duration = sourceDuration;
+    file.chapterMarkers = labels;
+    Chapter *group = [Chapter new]; group.name = @"Replaced group title"; [group addFile:file];
+    Check(addChapters(book.fileSystemRepresentation, @[group]) == 0, @"Embed imported markers inside one continuous audio file");
+    NSArray *snapshot = ChapterSnapshot(book);
+    Check(snapshot.count == 2 && [snapshot[0][0] isEqual:@"Opening — 日本語"] && [snapshot[0][1] unsignedLongLongValue] == 500, @"Imported titles and exact first boundary survive MP4 write");
+    Check([AudioSamples(book) isEqual:samples], @"Chapter import does not alter compressed audio");
+    // A file-relative list stays attached when files are grouped or reordered.
+    [group addFile:file];
+    AudioBinder *binder = [AudioBinder new];
+    TestDelegate *delegate = [TestDelegate new]; delegate.binder = binder;
+    [binder setDelegate:delegate];
+    NSString *grouped = [dir stringByAppendingPathComponent:@"imported-group.m4b"];
+    [binder addVolume:grouped files:@[file, file]];
+    Check([binder convert], @"Encode a grouped source fixture");
+    Check(file.duration.unsignedLongLongValue == (uint64_t)llround(file.sourceDuration.doubleValue), @"Conversion rounds duration to the nearest millisecond instead of truncating it");
+    Check(addChapters(grouped.fileSystemRepresentation, @[group]) == 0, @"Combine file-relative markers in a larger chapter group");
+    snapshot = ChapterSnapshot(grouped);
+    Check(snapshot.count == 4 && [snapshot[2][0] isEqual:@"Opening — 日本語"] && [snapshot[1][1] unsignedLongLongValue] == file.duration.unsignedLongLongValue - 500, @"Imported markers retain the source offset in grouped files");
+}
+
 int main(int argc, const char *argv[]) {
     @autoreleasepool {
         Check(argc == 2, @"Fixture directory provided");
@@ -335,6 +389,7 @@ int main(int argc, const char *argv[]) {
         VerifyAudio(path(@"book.m4b"), 4.5, 2, 44100);
         VerifyMetadataEditing(dir);
         VerifyChapterEditing(dir);
+        VerifyChapterImport(dir);
         CoverImageView *cover = [[CoverImageView alloc] initWithFrame:NSMakeRect(0, 0, 100, 100)];
         [[NSData dataWithContentsOfFile:path(@"cover.png")] writeToFile:path(@"extensionless") atomically:YES];
         cover.coverImageFilename = path(@"extensionless");

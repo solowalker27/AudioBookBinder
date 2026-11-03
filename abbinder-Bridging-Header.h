@@ -11,3 +11,5 @@
 #import "Chapter.h"
 #import "MP4File.h"
 #import "MetaEditor.h"
+
+#import "ChapterList.h"

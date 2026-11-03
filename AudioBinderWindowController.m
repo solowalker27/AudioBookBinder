@@ -31,6 +31,7 @@
 #import "AudioBookBinderAppDelegate.h"
 #import "AudioFile.h"
 #import "Chapter.h"
+#import "ChapterList.h"
 #import "ConfigNames.h"
 #import "ExpandedPathToIconTransformer.h"
 #import "ExpandedPathToPathTransformer.h"
@@ -814,6 +815,38 @@ enum abb_form_fields {
         
         [fileListView reloadData];
     }
+}
+
+// Import is deliberately scoped to one source so timestamps are unambiguous.
+- (IBAction)importChapters:(id)sender
+{
+    if (_converting || fileList.files.count != 1) return;
+    AudioFile *file = fileList.files.firstObject;
+    [ChapterList chooseForWindow:self.window duration:(uint64_t)llround(file.sourceDuration.doubleValue) completion:^(NSArray *chapters) {
+        if (self->_converting || self->fileList.files.count != 1 || self->fileList.files.firstObject != file) return;
+        file.chapterMarkers = chapters;
+        if (!self->fileList.chapterMode) [self->fileList switchChapterMode];
+        [self->fileListView reloadData];
+        [self->fileListView expandItem:nil expandChildren:YES];
+    }];
+}
+
+- (IBAction)removeImportedChapters:(id)sender
+{
+    if (_converting) return;
+    for (AudioFile *file in fileList.files) file.chapterMarkers = nil;
+    [fileListView reloadData];
+}
+
+- (BOOL)validateMenuItem:(NSMenuItem *)item
+{
+    if (item.action == @selector(importChapters:)) return !_converting && fileList.files.count == 1;
+    if (item.action == @selector(removeImportedChapters:)) {
+        if (_converting) return NO;
+        for (AudioFile *file in fileList.files) if (file.chapterMarkers.count) return YES;
+        return NO;
+    }
+    return !_converting;
 }
 
 - (IBAction) toggleChapters: (id)sender

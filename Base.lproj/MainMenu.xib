@@ -208,6 +208,13 @@
                     <modifierMask key="keyEquivalentModifierMask"/>
                     <menu key="submenu" title="Chapters" id="863">
                         <items>
+                            <menuItem title="Import Chapters…" id="ABB-import-chapters">
+                                <connections><action selector="importChapters:" target="-1" id="ABB-import-action"/></connections>
+                            </menuItem>
+                            <menuItem title="Remove Imported Chapters" id="ABB-remove-imported">
+                                <connections><action selector="removeImportedChapters:" target="-1" id="ABB-remove-imported-action"/></connections>
+                            </menuItem>
+                            <menuItem isSeparatorItem="YES" id="ABB-import-separator"/>
                             <menuItem title="Enable Chapters" keyEquivalent="e" id="865">
                                 <connections>
                                     <action selector="toggleChapters:" target="-1" id="1061"/>

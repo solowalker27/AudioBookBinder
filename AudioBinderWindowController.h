@@ -65,6 +65,8 @@
 - (IBAction) bind: (id)sender;
 - (IBAction) toggleQueue: (id)sender;
 - (IBAction) cancel: (id)sender;
+- (IBAction) importChapters:(id)sender;
+- (IBAction) removeImportedChapters:(id)sender;
 - (IBAction) toggleChapters: (id)sender;
 - (IBAction) joinFiles: (id)sender;
 - (IBAction) splitFiles: (id)sender;

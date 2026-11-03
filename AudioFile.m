@@ -42,6 +42,7 @@
         self.filePath = [path stringByExpandingTildeInPath];
         self.file = [self.filePath lastPathComponent];
         self.duration = [[NSNumber alloc] initWithInt:-1];
+        _sourceDuration = self.duration;
         self.valid = NO;
         self.artist = @"";
         self.name = @"";
@@ -100,6 +101,7 @@
             }
             if (info != NULL) CFRelease(info);
         }
+        _sourceDuration = self.duration;
         self.valid = self.duration.doubleValue >= 0;
         AudioFileClose(audioFile);
     }

@@ -515,7 +515,9 @@ stringForOSStatus(OSStatus err)
 
 
         if (!atomic_load(&_canceled)) {
-            UInt32 duration = framesConverted*1000/_sampleRate;
+            // A float sample rate would force the entire expression to float,
+            // losing milliseconds on long books. Round once at the output boundary.
+            UInt32 duration = (UInt32)llround((double)framesConverted * 1000.0 / (double)_sampleRate);
             [_delegate conversionFinished:inFile duration:duration];
         }
     }  

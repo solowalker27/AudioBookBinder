@@ -121,3 +121,44 @@ hashes/timestamps after both insertion and removal. Only generated fixture
 copies were edited. Results are in `build/chapter-ui-{before,after,removed}.json`,
 the fixture is in `build/chapter-ui-fixtures/`, and the suite log is
 `build/chapter-tests.log`.
+
+## Chapter-list import validation (November 2, 2026)
+
+`./scripts/test.sh` passed with universal Release app/CLI builds and 1,709 core
+integration assertions, plus CLI integration checks. New coverage includes:
+
+- Standard Audacity point/region labels, six-decimal timestamps, UTF-8 BOM,
+  CRLF, Unicode titles, and millisecond rounding.
+- FFmpeg metadata with explicit rational and default nanosecond timebases,
+  global/stream tags, escaped punctuation, and continued title lines.
+- Empty/malformed lists, duplicate or out-of-order starts, nonzero first starts,
+  timestamps outside the audio, invalid timebases/overflow, and invalid UTF-8.
+- Embedded file-relative chapters within one continuous source and grouped
+  sources, including byte-for-byte compressed-audio preservation.
+- CLI imports in both formats, independently inspected with ffprobe for exact
+  start times and Unicode titles; conflicting options and failed imports
+  preserve existing output bytes.
+
+An isolated copy of the Release app was operated through native UI automation:
+added a generated four-second WAV, imported two Audacity labels through
+Chapters > Import Chapters…, reviewed the preview, checked the expanded chapter
+list visually, and exported an M4B. ffprobe verified titles and starts at zero
+and 1.5 seconds, with the final chapter ending at four seconds. The exported
+book was reopened in the metadata editor and its Chapters tab displayed both
+markers and the new Import Chapters… control. Fixtures are under
+`build/chapter-import-ui/`. The user's existing app process and audio were not
+modified. Existing macOS/Intel runtime limitations above still apply.
+
+### Long-source reimport regression
+
+The follow-up Release suite passed 1,716 core assertions and all CLI checks.
+A sparse 13-hour WAV fixture reproduces a stored output duration one millisecond
+shorter than the source; import now validates against the preserved original
+source duration. Actual encoding also checks nearest-millisecond duration
+rounding. The conversion calculation now uses double precision rather than
+promoting the entire expression to float through the sample-rate property.
+A read-only check of the reported source and matching FFmpeg list reproduced
+45 valid chapters before conversion, rejection with the old 48,754,048 ms
+value, and successful import with the corrected 48,754,049 ms value. No source
+audio or chapter-list files were modified. Timing errors now identify the
+chapter and its timestamps alongside the audio duration.

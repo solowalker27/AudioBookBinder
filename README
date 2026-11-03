@@ -44,12 +44,52 @@ file to preview it. Create Audiobook opens the native Save panel. If the book
 needs multiple volumes, choose an export folder to authorize writing all of
 them. Audio quality and volume duration are available in Settings.
 
+To add chapters to one long audio file, add that file, then choose Chapters >
+Import Chapters…. Select a UTF-8 FFmpeg metadata file (.ffmetadata, .ffmeta,
+.txt) or a standard Audacity label export (.txt). Review the timestamps and
+click Import. Expand the source file to see the imported titles/start times,
+then Create Audiobook as usual. Chapters are enabled automatically. Importing
+again replaces that source’s list; Chapters > Remove Imported Chapters clears
+it. Turning off Enable Chapters omits markers from the export.
+
+FFmpeg metadata example (times are milliseconds with TIMEBASE=1/1000):
+
+    ;FFMETADATA1
+    [CHAPTER]
+    TIMEBASE=1/1000
+    START=0
+    END=60000
+    title=Opening
+    [CHAPTER]
+    TIMEBASE=1/1000
+    START=60000
+    END=120000
+    title=Chapter Two
+
+Audacity’s File > Export > Export Labels produces tab-separated start seconds,
+end seconds, and title. Point labels work well for chapters:
+
+    0.000000<TAB>0.000000<TAB>Opening
+    60.000000<TAB>60.000000<TAB>Chapter Two
+
+Use actual tab characters in place of <TAB>. Start the first chapter at zero;
+subsequent starts must increase and fall before the end of the audio. Region
+end times must also fit within the audio. Each chapter runs to the next start,
+and the last runs to the audio’s end, regardless of the label/metadata end.
+Times round to milliseconds. Invalid lists leave the current chapters intact.
+Audacity’s optional spectral/frequency extension is not supported.
+
+Format references:
+https://ffmpeg.org/ffmpeg-formats.html#Metadata
+https://manual.audacityteam.org/man/importing_and_exporting_labels.html
+
 To edit an existing .m4b, choose File > Edit Audiobook Metadata… (Shift-Command-O).
 The editor loads its title, author, narrator, album, genre, and embedded cover.
 Edit or clear those fields, choose a PNG/JPEG cover or remove the current one,
 then click Save (Command-S). In the Chapters tab, edit chapter titles and start
 times, add a marker by splitting the selected chapter, or remove selected
-markers. Times accept HH:MM:SS.mmm, MM:SS.mmm, or seconds; the first marker is
+markers, or use Import Chapters… to replace the list from either format above.
+Imports remain unsaved until you click Save. Times accept HH:MM:SS.mmm, MM:SS.mmm, or seconds; the first marker is
 always at zero and the last chapter runs to the end of the audio. Removing a
 marker merges its interval into the preceding chapter; removing the first
 marker extends the next chapter back to zero. Removing all markers clears the
@@ -88,6 +128,7 @@ abbinder [-hsv] [-c 1|2] [-r samplerate] [-a author] [-t title]
                             %a - artis (obtained from source file)
                             %t - title (obtained from source file)
         -h              show this message
+        --chapters file import FFmpeg metadata or Audacity labels for one audio file
         -i file         get input files list from file, "-" for standard input
         -q              quiet mode (no output)
         -r rate         sample rate of audiobook. Default: 44100
@@ -118,6 +159,10 @@ So previous example could be rewritten like:
     abbinder -o book.m4b -E 'Chapter %N' track01.mp3 track02.mp3
 
 == Examples
+
+Convert one file with a timestamped chapter list (cannot combine with -e/-E
+or @chapter@ markers; requires exactly one audio input):
+  bash$ abbinder --chapters chapters.ffmetadata -o book.m4b long-recording.mp3
 
 Convert one file to m4b
   bash$ abbinder -o book.m4b myfile.mp3

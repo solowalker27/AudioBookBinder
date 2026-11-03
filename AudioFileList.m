@@ -28,6 +28,7 @@
 #import "AudioFileList.h"
 #import "AudioFile.h"
 #import "Chapter.h"
+#import "MP4File.h"
 #import "AudioBookBinderAppDelegate.h"
 #import "ConfigNames.h"
 
@@ -204,6 +205,7 @@
             return [(Chapter*)item files];
         }
     }
+    if ([item isKindOfClass:AudioFile.class]) return [item chapterMarkers];
     return nil;
 }
 
@@ -220,6 +222,7 @@
             return [item totalFiles];
     }
     
+    if ([item isKindOfClass:AudioFile.class]) return [[item chapterMarkers] count];
     return 0;
 }
 
@@ -227,8 +230,7 @@
 {
     if ([item isKindOfClass:[Chapter class]])
         return YES;
-    else
-        return NO;
+    return [item isKindOfClass:AudioFile.class] && [[item chapterMarkers] count] > 0;
 }
 
 - (id)outlineView:(NSOutlineView *)outlineView child:(NSInteger)index ofItem:(id)item
@@ -243,7 +245,7 @@
     
     if ([item isKindOfClass:[Chapter class]])
         return [item fileAtIndex:index];
-    
+    if ([item isKindOfClass:AudioFile.class]) return [item chapterMarkers][index];
     return nil;
 }
 
@@ -253,6 +255,11 @@
     if (item == nil)
         return nil;
     
+    if ([item isKindOfClass:MP4Chapter.class]) {
+        if ([tableColumn.identifier isEqual:COLUMNID_NAME]) return [item title];
+        if ([tableColumn.identifier isEqual:COLUMNID_TIME]) return [MP4Chapter timestampForMilliseconds:[item startMilliseconds]];
+        return @"";
+    }
     if ([item isKindOfClass:[AudioFile class]])
     {
         AudioFile *file = item;
@@ -264,6 +271,7 @@
                 objectValue = file.name;
             else
                 objectValue = file.file;
+            if (file.chapterMarkers.count) objectValue = [NSString stringWithFormat:NSLocalizedString(@"%@ (%lu imported chapters)", nil), objectValue, (unsigned long)file.chapterMarkers.count];
         } else if ([tableColumn.identifier isEqualToString:COLUMNID_AUTHOR])
             objectValue = file.artist;
         else if ([tableColumn.identifier isEqualToString:COLUMNID_ALBUM])
@@ -365,13 +373,13 @@
 - (BOOL)outlineView:(NSOutlineView *)outlineView shouldExpandItem:(id)item 
 {
     
-    return ([item isKindOfClass:[Chapter class]]);
+    return [item isKindOfClass:Chapter.class] || [item isKindOfClass:AudioFile.class];
 }
 
 - (BOOL)outlineView:(NSOutlineView *)outlineView shouldSelectItem:(id)item 
 {
     
-    return YES;
+    return ![item isKindOfClass:MP4Chapter.class];
 }        
 
 
@@ -380,6 +388,7 @@
        toPasteboard:(NSPasteboard *)pboard 
 {    
 
+    for (id item in items) if ([item isKindOfClass:MP4Chapter.class]) return NO;
     // we have stale _draggedNodes, release them
     if (_draggedNodes) {
         _draggedNodes = nil;
@@ -408,6 +417,7 @@
                    proposedItem:(id)item 
              proposedChildIndex:(NSInteger)childIndex 
 {
+    if (item && ![item isKindOfClass:Chapter.class]) return NSDragOperationNone;
     NSDragOperation result = NSDragOperationGeneric;
 
     //

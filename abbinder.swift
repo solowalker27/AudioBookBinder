@@ -53,6 +53,8 @@ struct abbinder: ParsableCommand {
     @Option(name: .customShort("E"),
             help: ArgumentHelp("make each file a chapter with name defined by template\n%N - chapter number\n%a - artis (obtained from source file)\n%t - title (obtained from source file)", valueName: "template"))
     var fileChapterTemplate: String?
+    @Option(name: .long, help: ArgumentHelp("import FFmpeg metadata or Audacity labels for one input audio file", valueName: "file"))
+    var chapters: String?
     @Option(name: .customShort("g"),
             help: ArgumentHelp("book genre", valueName: "genre"))
     var bookGenre: String = ""
@@ -126,6 +128,7 @@ struct abbinder: ParsableCommand {
         print(
             "\t-i file\t\tget input files list from file, \"-\" for standard input"
         )
+        print("\t--chapters file\timport FFmpeg metadata or Audacity labels for one input")
         print("\t-l hours\t\tsplit audiobook to volumes max # hours long")
         print("\t-o outfile\t\taudiobook output file")
         print("\t-r rate\t\tsample rate of audiobook. Default: 44100")
@@ -201,6 +204,13 @@ struct abbinder: ParsableCommand {
             }
         }
 
+        if chapters != nil {
+            if withChapters || inputFilenames.filter({ !$0.isEmpty }).count != 1 {
+                throw ValidationError("--chapters requires exactly one audio file and cannot be combined with -e/-E or @chapter@ markers")
+            }
+            withChapters = true
+        }
+
         // split output filename to base and extension in order to get
         // filenames for consecutive volume files
         let outFileBase = URL(fileURLWithPath: outFile).deletingPathExtension().path
@@ -265,6 +275,10 @@ struct abbinder: ParsableCommand {
                     )
                     throw ExitCode.failure
                 }
+            }
+
+            if let chapters {
+                file.chapterMarkers = try ChapterList.chapters(from: URL(fileURLWithPath: chapters), duration: UInt64(file.duration.doubleValue.rounded()))
             }
 
             inputFiles.append(file)

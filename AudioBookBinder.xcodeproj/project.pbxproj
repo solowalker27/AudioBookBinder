@@ -7,6 +7,8 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+        ABBF00010000000000000001 /* ChapterList.m in Sources */ = {isa = PBXBuildFile; fileRef = ABBF00010000000000000003 /* ChapterList.m */; };
+        ABBF00010000000000000002 /* ChapterList.m in Sources */ = {isa = PBXBuildFile; fileRef = ABBF00010000000000000003 /* ChapterList.m */; };
 		ABBE00010000000000000004 /* UniformTypeIdentifiers.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = ABBE00010000000000000005 /* UniformTypeIdentifiers.framework */; };
 		ABBE00010000000000000001 /* MetadataWindowController.m in Sources */ = {isa = PBXBuildFile; fileRef = ABBE00010000000000000002 /* MetadataWindowController.m */; };
 		8DD76F9C0486AA7600D96B5E /* Foundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 08FB779EFE84155DC02AAC07 /* Foundation.framework */; };
@@ -249,6 +251,8 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+        ABBF00010000000000000003 /* ChapterList.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = ChapterList.m; sourceTree = "<group>"; };
+        ABBF00010000000000000004 /* ChapterList.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = ChapterList.h; sourceTree = "<group>"; };
 		ABBE00010000000000000005 /* UniformTypeIdentifiers.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = UniformTypeIdentifiers.framework; path = System/Library/Frameworks/UniformTypeIdentifiers.framework; sourceTree = SDKROOT; };
 		ABBE00010000000000000002 /* MetadataWindowController.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = MetadataWindowController.m; sourceTree = "<group>"; };
 		ABBE00010000000000000003 /* MetadataWindowController.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = MetadataWindowController.h; sourceTree = "<group>"; };
@@ -546,6 +550,8 @@
 				9F02CE11101EA8B100AE315D /* AudioBinder.m */,
 				ABBE00010000000000000002 /* MetadataWindowController.m */,
 				ABBE00010000000000000003 /* MetadataWindowController.h */,
+                ABBF00010000000000000003 /* ChapterList.m */,
+                ABBF00010000000000000004 /* ChapterList.h */,
 				9F1FFD5B185D6F8F005EF748 /* AudioBinderWindowController.h */,
 				9F1FFD5C185D6F8F005EF748 /* AudioBinderWindowController.m */,
 				32A70AAB03705E1F00C91783 /* AudioBookBinder_Prefix.pch */,
@@ -1078,6 +1084,7 @@
 				9F3E99E6303B8E79007711A0 /* abbinder.swift in Sources */,
 				9FA52D9211C2F100003FD879 /* AudioFile.m in Sources */,
 				9FA52DA011C2FFCE003FD879 /* Chapter.m in Sources */,
+                ABBF00010000000000000001 /* ChapterList.m in Sources */,
 				9F61BE3A11FBBC8D00654B3B /* AudioBookVolume.m in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -1202,6 +1209,7 @@
 				9F62872C1194D502000D3A05 /* CoverImageView.m in Sources */,
 				9FB4DE0711C05C0E007B3DDE /* MetaEditor.mm in Sources */,
 				9FA52D9F11C2FFCE003FD879 /* Chapter.m in Sources */,
+                ABBF00010000000000000002 /* ChapterList.m in Sources */,
 				9FD5D3681CEA549E008B74AF /* QueueOverlayView.m in Sources */,
 				9F61BE3B11FBBC8D00654B3B /* AudioBookVolume.m in Sources */,
 				ABBE00010000000000000001 /* MetadataWindowController.m in Sources */,

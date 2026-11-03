@@ -1,5 +1,6 @@
 #import "MetadataWindowController.h"
 #import "MP4File.h"
+#import "ChapterList.h"
 #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 
 @interface MetadataWindowController ()
@@ -19,6 +20,7 @@
 @property NSTableView *chapterTable;
 @property NSMutableArray<NSMutableDictionary<NSString *, NSString *> *> *chapterRows;
 @property NSButton *addChapterButton;
+@property NSButton *importChapterButton;
 @property NSButton *removeChapterButton;
 @end
 
@@ -191,7 +193,8 @@
     self.addChapterButton = [NSButton buttonWithTitle:NSLocalizedString(@"Add Chapter", nil) target:self action:@selector(addChapter:)];
     self.removeChapterButton = [NSButton buttonWithTitle:NSLocalizedString(@"Remove Chapter", nil) target:self action:@selector(removeChapter:)];
     self.removeChapterButton.enabled = NO;
-    for (NSView *child in @[scroll, hint, duration, self.addChapterButton, self.removeChapterButton]) {
+    self.importChapterButton = [NSButton buttonWithTitle:NSLocalizedString(@"Import Chapters…", nil) target:self action:@selector(importChapters:)];
+    for (NSView *child in @[scroll, hint, duration, self.addChapterButton, self.removeChapterButton, self.importChapterButton]) {
         child.translatesAutoresizingMaskIntoConstraints = NO;
         [view addSubview:child];
     }
@@ -208,7 +211,9 @@
         [self.addChapterButton.leadingAnchor constraintEqualToAnchor:scroll.leadingAnchor],
         [self.addChapterButton.bottomAnchor constraintEqualToAnchor:view.bottomAnchor constant:-12],
         [self.removeChapterButton.leadingAnchor constraintEqualToAnchor:self.addChapterButton.trailingAnchor constant:8],
-        [self.removeChapterButton.centerYAnchor constraintEqualToAnchor:self.addChapterButton.centerYAnchor]
+        [self.removeChapterButton.centerYAnchor constraintEqualToAnchor:self.addChapterButton.centerYAnchor],
+        [self.importChapterButton.trailingAnchor constraintEqualToAnchor:scroll.trailingAnchor],
+        [self.importChapterButton.centerYAnchor constraintEqualToAnchor:self.addChapterButton.centerYAnchor]
     ]];
     return view;
 }
@@ -285,6 +290,27 @@
     }
     self.metadata.chapters = chapters;
     return [self.metadata validateChaptersWithError:error];
+}
+
+- (void)importChapters:(id)sender
+{
+    if (self.saving || ![self.window makeFirstResponder:nil]) return;
+    [ChapterList chooseForWindow:self.window duration:self.metadata.durationMilliseconds completion:^(NSArray *chapters) {
+        NSArray *previous = self.metadata.chapters;
+        self.metadata.chapters = chapters;
+        NSError *error = nil;
+        if (![self.metadata validateChaptersWithError:&error]) {
+            self.metadata.chapters = previous;
+            [[NSAlert alertWithError:error] beginSheetModalForWindow:self.window completionHandler:nil];
+            return;
+        }
+        [self.chapterRows removeAllObjects];
+        for (MP4Chapter *chapter in chapters)
+            [self.chapterRows addObject:[@{@"title": chapter.title, @"start": [MP4Chapter timestampForMilliseconds:chapter.startMilliseconds]} mutableCopy]];
+        [self.chapterTable deselectAll:nil];
+        [self.chapterTable reloadData];
+        self.window.documentEdited = YES;
+    }];
 }
 
 - (void)addChapter:(id)sender
@@ -419,6 +445,7 @@
         }
     }
     self.addChapterButton.enabled = enabled;
+    self.importChapterButton.enabled = enabled;
     self.removeChapterButton.enabled = enabled && self.chapterTable.selectedRowIndexes.count > 0;
     self.saveButton.enabled = enabled;
     self.cancelButton.enabled = enabled;

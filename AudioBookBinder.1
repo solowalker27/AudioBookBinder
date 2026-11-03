@@ -34,6 +34,11 @@ is able to write metadata like author and title to newly created audiofile.
 Set book author
 .It Fl h
 Show help screen
+.It Fl -chapters Ar file
+Import a UTF-8 FFmpeg metadata file or standard Audacity label file for one
+continuous audio input. Cannot be combined with -e/-E or @chapter@ markers.
+The first chapter must start at zero; start times must increase and fit within
+the audio. Each chapter ends at the next start; the last ends with the audio.
 .It Fl i Ar listfile
 Read list of input files from listfile. Use - for stdin
 .It Fl s

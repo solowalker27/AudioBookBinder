@@ -27,15 +27,22 @@
 
 #import <Foundation/Foundation.h>
 
+@class MP4Chapter;
+
 @interface AudioFile : NSObject
 
 @property(readwrite, copy) NSString *filePath;
 @property(readwrite, copy) NSString *file;
 @property(readwrite, copy) NSNumber *duration;
+// Original duration in milliseconds; encoding updates duration for output timing.
+@property(readonly, copy) NSNumber *sourceDuration;
 @property(readwrite, assign) BOOL valid;
 @property(readwrite, copy) NSString *artist;
 @property(readwrite, copy) NSString *name;
 @property(readwrite, copy) NSString *album;
+
+// Imported markers are relative to this source file.
+@property(copy) NSArray<MP4Chapter *> *chapterMarkers;
 
 - (id) initWithPath:(NSString*)path;
 

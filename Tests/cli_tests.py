@@ -50,3 +50,27 @@ if shutil.which('ffprobe'):
     assert [c['tags']['title'] for c in book['chapters']] == ['Chapter 1', 'Chapter 2']
     assert book['format']['tags']['title'] == 'CLI Book'
 print('PASS: real hour-long volume splitting, filenames, duration and chapter boundaries')
+
+# One continuous input with external, timestamped chapter lists.
+labels = root / 'labels.txt'
+labels.write_text('0.000000\t0.000000\tOpening — 日本語\n0.500000\t0.500000\tNext\n', encoding='utf-8')
+ffmetadata = root / 'chapters.ffmetadata'
+ffmetadata.write_text(';FFMETADATA1\n[CHAPTER]\nTIMEBASE=1/1000\nSTART=0\nEND=500\ntitle=Opening — 日本語\n[CHAPTER]\nTIMEBASE=1/1000\nSTART=500\nEND=1250\ntitle=Next\n', encoding='utf-8')
+for name, chapter_file in [('labels', labels), ('ffmetadata', ffmetadata)]:
+    output = root / (name + '.m4b')
+    run('-q', '--chapters', chapter_file, '-o', output, root / 'mono.wav')
+    if shutil.which('ffprobe'):
+        result = subprocess.run(['ffprobe', '-v', 'error', '-show_chapters', '-show_format', '-of', 'json', str(output)], check=True, capture_output=True)
+        book = json.loads(result.stdout)
+        assert [c['tags']['title'] for c in book['chapters']] == ['Opening — 日本語', 'Next']
+        assert [float(c['start_time']) for c in book['chapters']] == [0, 0.5]
+        assert abs(float(book['format']['duration']) - 1.25) < 0.12
+run('-q', '--chapters', labels, '-E', '', '-o', root / 'invalid.m4b', root / 'mono.wav', ok=False)
+run('-q', '--chapters', labels, '-o', root / 'invalid.m4b', '@Chapter@', root / 'mono.wav', ok=False)
+run('-q', '--chapters', labels, '-o', root / 'invalid.m4b', root / 'mono.wav', root / 'stereo.wav', ok=False)
+protected = root / 'protected.m4b'
+protected.write_bytes(b'Preserve existing output')
+labels.write_text('0\t0\tFirst\n9\t9\tPast end\n', encoding='utf-8')
+run('-q', '--chapters', labels, '-o', protected, root / 'mono.wav', ok=False)
+assert protected.read_bytes() == b'Preserve existing output'
+print('PASS: external FFmpeg/Audacity chapters, Unicode titles, exact timestamps, conflicts, and failed import output protection')
